@@ -9,4 +9,15 @@ python -m api.server                  # http://127.0.0.1:8765/ をブラウザ�
 python -m core.cli "GPUの状態は？"     # CLI
 ASSISTANT_INTEGRATION=1 python -m pytest -m integration   # 実機（llama.cpp）接続
 ```
+## Android など別端末のブラウザから使う
+1. `config/config.toml` の `[api]` に待ち受けアドレスを書く（未設定なら `host` の 127.0.0.1 のみ）:
+   `hosts = ["127.0.0.1", "192.168.0.13", "100.84.113.46"]`
+2. サーバー用PCで `python -m api.tokens add my-android` を実行し、表示されたトークンを控える（一度だけ表示）。
+3. 管理者 PowerShell でファイアウォールを許可する（LAN と Tailscale の中だけ）:
+   `New-NetFirewallRule -DisplayName "Assistant API" -Direction Inbound -Protocol TCP -LocalPort 8765 -RemoteAddress LocalSubnet,100.64.0.0/10 -Action Allow`
+4. `python -m api.server` を起動したままにする。
+5. Android のブラウザで `http://192.168.0.13:8765/`（外出先は Tailscale を接続して `http://100.84.113.46:8765/`）を開き、トークンを入力する。
+
+ルーターのポート開放はしない。HTTP のため LAN/Tailscale の外では使わない（Tailscale 内は暗号化される）。
+
 APIキーは `%USERPROFILE%\.assistant\secrets\llama_api_key.txt` に置く。

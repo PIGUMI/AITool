@@ -102,10 +102,21 @@ def main() -> None:
     from core.secrets import secrets_dir
 
     cfg = load_config()
-    srv = make_server(build_agent(), TokenStore(secrets_dir() / cfg["api"]["tokens_file"]),
-                      cfg["api"]["host"], cfg["api"]["port"])
-    print(f"listening on {cfg['api']['host']}:{cfg['api']['port']}")
-    srv.serve_forever()
+    agent = build_agent()
+    store = TokenStore(secrets_dir() / cfg["api"]["tokens_file"])
+    hosts = cfg["api"].get("hosts") or [cfg["api"]["host"]]
+    servers = []
+    for h in hosts:  # LAN と Tailscale など、待ち受けるアドレスごとに1つ起動する
+        try:
+            servers.append(make_server(agent, store, h, cfg["api"]["port"]))
+            print(f"listening on {h}:{cfg['api']['port']}")
+        except OSError as e:  # 例: Tailscale が停止中でアドレスが無い。他のアドレスは続ける
+            print(f"skip {h}: {e.strerror or type(e).__name__}")
+    if not servers:
+        raise SystemExit("待ち受けできるアドレスがありません")
+    for s in servers[1:]:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    servers[0].serve_forever()
 
 
 if __name__ == "__main__":
