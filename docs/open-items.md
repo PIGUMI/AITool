@@ -9,6 +9,10 @@
 - **端末のファイルアクセス（Windows EXE）**: 実装済み・実機検証済み（44項目。フォルダ外・リンク・秘匿ファイル・実行ファイル書き込みの拒否を含む）。docs/app-setup.md
 - **自己アップデート**: 実装済み・実機検証済み。サーバー（確認→準備→承認→再起動→確定、失敗時の自動ロールバック。24項目）と Faraway.exe（SHA-256 照合つき入れ替え。13項目）。docs/self-update.md
 
+## Android アプリ（APK）について（未検証）
+- 端末ファイルアクセス（Storage Access Framework・常駐サービス・Keystore でトークン暗号化）のコードは書いたが、**Android SDK が無いためビルド・実機確認ができていない**。Android Studio でのビルド結果（エラーがあればその内容）を教えてほしい
+- 未実装: 端末再起動後の自動起動（BOOT_COMPLETED）、APK の自己更新
+
 ## 自己更新を使い始めるために（ぴぐみさんの操作）
 - 一度だけ `python -m core.updater bootstrap` を実行し、表示された起動コマンド（supervisor.py）でサーバーを起動し直す。直接 `python -m api.server` で起動したサーバーは、確認・準備まで（適用は安全のため拒否）
 - PR を main にマージする（更新の対象は main にマージ済みのコードだけ）。リポジトリ名を変更したら `[update] remote_url` を新しい URL に
