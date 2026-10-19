@@ -1,4 +1,4 @@
-# アシスタント設定。シークレット（APIキー等）はここに書かない。
+# Faraway 設定。シークレット（APIキー等）はここに書かない。
 # シークレットは %USERPROFILE%\.assistant\secrets\ から読む。
 
 [llm]
@@ -71,7 +71,7 @@ max_file_bytes = 300000
 history_commits = 300         # 索引するコミットメッセージの件数（最新から）
 
 [[search.repos]]
-name = "aitool"
+name = "faraway"
 path = "C:\\Users\\user\\Documents\\AITool"
 ref = "HEAD"
 
@@ -92,7 +92,7 @@ git_name = "Assistant"
 git_email = "assistant@localhost"
 
 [[dev.repos]]
-name = "aitool"
+name = "faraway"
 remote_url = "https://github.com/PIGUMI/AITool.git"
 base_ref = "origin/main"          # main への直接 push はしない。PR 経由
 build = []

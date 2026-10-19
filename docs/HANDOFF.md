@@ -2,6 +2,8 @@
 
 この1枚を読めば、制作を続けられるようにまとめてあります。仕様の正は `CLAUDE.md`、設計の決定事項はこの資料の「3. 決定事項」です。両者が食い違う場合は、この資料の3節（ぴぐみさんの決定）を優先し、`CLAUDE.md` 側を直してください（例：スロットは3本ではなく2本）。
 
+> 2026-10-20 追記: 開発名を **Faraway** に決定。GitHub リポジトリ名は AITool → Faraway に変更（旧URLは GitHub が自動で転送する）。ローカルのフォルダ名 `Documents\AITool` は変えていない。登録リポジトリ名は `aitool` → `faraway`。
+
 最終更新: 2026-10-19 / リポジトリ: https://github.com/PIGUMI/AITool / PR: https://github.com/PIGUMI/AITool/pull/1（下書き）/ ブランチ: `feature/phase1-core`
 
 ---

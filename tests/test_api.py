@@ -75,7 +75,7 @@ def test_tokens_stored_as_hash(srv):
 
 def test_ui_page_served_without_token(srv):
     base, *_ = srv
-    assert "アシスタント" in call(base + "/").read().decode()
+    assert "Faraway" in call(base + "/").read().decode()
 
 
 def test_bad_request_body(srv):

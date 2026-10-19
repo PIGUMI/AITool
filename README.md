@@ -1,4 +1,5 @@
-# アシスタント
+# Faraway
+常駐 AI アシスタント（開発名 Faraway）。
 仕様は CLAUDE.md。フェーズ1（権限ポリシー・監査ログ・host_status・network・エージェントループ）とチャット画面の最小版。
 
 ```

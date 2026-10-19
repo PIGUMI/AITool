@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>アシスタント管理</title>
+<title>Faraway 管理</title>
 <style>
   :root { --bg:#0f1419; --panel:#1a2129; --text:#e6edf3; --mute:#8b98a5; --accent:#4cc2ff; --line:#2b3641; --ok:#3fb950; --warn:#d29922; --err:#ff7b72; }
   @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --mute:#656d76; --accent:#0969da; --line:#d0d7de; --ok:#1a7f37; --warn:#9a6700; --err:#cf222e; } }
@@ -32,7 +32,7 @@
 </style>
 </head>
 <body>
-<header><strong>アシスタント管理</strong><a href="/">チャットへ</a><button id="tok" type="button">トークン設定</button></header>
+<header><strong>Faraway 管理</strong><a href="/">チャットへ</a><button id="tok" type="button">トークン設定</button></header>
 <nav id="tabs"></nav>
 <main id="view" aria-live="polite"></main>
 <script>
@@ -105,7 +105,7 @@ const views = {
   async jobs(v) {
     const form = el('div', 'card'), ta = el('textarea'), row = el('div', 'row'), when = el('select'), go = el('button', '', 'ジョブを追加'), out = el('div');
     ta.rows = 3; ta.style.cssText = 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit';
-    ta.placeholder = '預ける依頼（例：aitool のテストを実行して結果をまとめて）';
+    ta.placeholder = '預ける依頼（例：faraway のテストを実行して結果をまとめて）';
     const draw = async () => {
       const { jobs, window } = await api('/api/jobs');
       when.replaceChildren(new Option('今すぐ（対話中は延期）', 'now'), new Option(`夜間のみ（${window ? window.join('〜') : '-'}）`, 'night'));
