@@ -1,10 +1,27 @@
-# 未対応・未決事項（フェーズ1時点）
-- GPU状態の取得: AMD RX 9060 XT を Windows から読む方法が未決。config の `host_status.gpu_command`（JSONを出すコマンド）が空の間は「取得不可」と答える。値は推測しない
-- CPU・メモリ: `psutil` を使う設計だが、依存追加の確認待ちのため未導入（未導入なら「取得不可」）
-- 依存パッケージ: 実行時は標準ライブラリのみ。開発時は pytest のみ
-- ストリーミング: SSEでツール実行の進捗と最終回答を配信。回答のトークン単位の逐次表示は未対応
-- R2の承認フロー、dev、calendar、search、notify はフェーズ2以降
-- network: Raspberry Pi・TL-SG105E・開発者PCのアドレス未設定（無効）
-- ダッシュボード・承認ダイアログ・監査ログ検索のUIは未実装（チャット画面のみ）
-- PWA化とHTTPS（VPN経由）はフェーズ4の前に確認
-- 実機統合テスト（tests/test_integration.py）は未実行
+# 未対応・未決事項（2026-10-20 更新）
+
+## 解決済み
+- 最終回答が空になる問題（docs/llm-setup.md）
+- GPU/CPU/メモリの取得: psutil なしで Windows 標準機能から取得（GPU 温度だけは取得不可と返す）
+- dev-pc のアドレス（192.168.0.4）を設定
+- ブラウザ版（Android）から LAN/Tailscale 経由で使えるようにした。管理画面（/admin）を追加
+- 実機統合テストは通った
+
+## ぴぐみさんの操作が必要（私には実行できない）
+- Google カレンダーの認証（docs/setup-calendar.md）。OAuth クライアント JSON の用意と、ブラウザでの同意
+- ntfy の導入（docs/setup-ntfy.md）。第三者のバイナリは私がダウンロード・実行しない決まり
+- SearXNG の導入（Docker/WSL 等の方式を決めてから。入れるまでは Wikipedia API で代替）
+- ファイアウォールの許可（API 8765 / ntfy 2586。システム設定のため私は変更しない）
+- main の保護が効いているかの確認、PR #1 のレビューとマージ
+
+## 未実装・未決
+- R2 の承認フロー、dev（worktree・ビルド・テスト・push・PR）、calendar の登録・変更 → フェーズ3
+- 管理画面: 承認ダイアログ（フェーズ3の承認フローと同時）、トークンの失効操作（今は端末一覧の表示のみ）
+- ジョブ（夜間バッチ）のキューと予約実行。スロットは対話1・バッチ1（常時起動、02:00〜06:00 は仮）
+- search: tree-sitter での構文解析は未採用（Python は ast、他言語は行頭パターン）。PR 説明文の索引は未対応。登録リポジトリは当面このアシスタント自身だけ
+- web_search: DuckDuckGo は HTTP 202（ボット対策）で使えない（回避しない）。SearXNG 導入後に `providers` の先頭に使う
+- GPU 温度: 標準の性能カウンターに無い。必要なら GPU 取得コマンド（`host_status.gpu_command`）を別途用意する
+- network: Raspberry Pi・TL-SG105E のアドレス未設定（無効）。dev-pc は電源が入っているときに ping の確認が必要（ファイアウォールが ICMP を遮断していないか）
+- Windows サービス化（NSSM）、PWA 化と HTTPS（VPN 経由）
+- 9B の品質評価（小〜中のタスク数件で6割ライン）。依頼内容に応じたツール強制ルール（`[[agent.force_tools]]`）は、実運用で誤検知が出たら調整する
+- ストリーミング: 回答のトークン単位の逐次表示は未対応
