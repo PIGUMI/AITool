@@ -32,11 +32,14 @@ class LLMClient:
         self._transport = transport or _urllib_transport
         self.extra = dict(extra or {})  # 例: {"chat_template_kwargs": {"enable_thinking": False}}
 
-    def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        """assistant メッセージ（dict）を返す。"""
+    def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
+             tool_choice: str | None = None) -> dict[str, Any]:
+        """assistant メッセージ（dict）を返す。tool_choice="required" でツール呼び出しを強制できる。"""
         payload: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": 0.2}
         if tools:
             payload["tools"] = tools
+            if tool_choice:
+                payload["tool_choice"] = tool_choice
         payload.update(self.extra)
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self._api_key}"}
         failures: list[str] = []

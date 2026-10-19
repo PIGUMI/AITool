@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from policy.registry import ToolRegistry
-from tools import audit_search, clock, host_status, network, repo, search, web_fetch
+from tools import audit_search, clock, host_status, network, repo, search, web_fetch, web_search
 
 from .agent import Agent
 from .audit import AuditLog
@@ -31,6 +31,7 @@ def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None) -> ToolRe
     reg.register(network.build_tool(cfg.get("network", {})))
     reg.register(web_fetch.build_tool(cfg.get("web", {})))
     reg.register(search.build_tool(cfg.get("search", {})))
+    reg.register(web_search.build_tool(cfg.get("web_search", {})))
     return reg
 
 
@@ -43,4 +44,5 @@ def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = N
         llm = LLMClient(cfg["llm"]["endpoints"], key, cfg["llm"].get("model", "qwen3.5-9b"),
                         cfg["llm"].get("timeout_seconds", 120), extra=llm_extra(cfg))
     slots = SlotPool(cfg["slots"]["interactive"], cfg["slots"]["batch"])
-    return Agent(llm, build_registry(cfg, audit), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots)
+    return Agent(llm, build_registry(cfg, audit), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots,
+                 force_rules=cfg["agent"].get("force_tools", []))

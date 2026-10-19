@@ -50,7 +50,9 @@ def _wrap(name: str, payload: Any) -> str:
 class Agent:
     def __init__(self, llm: LLMClient, registry: ToolRegistry, audit: AuditLog,
                  max_tool_calls: int = 20, max_llm_turns: int = 25,
-                 slots: SlotPool | None = None) -> None:
+                 slots: SlotPool | None = None, force_rules: list[dict[str, Any]] | None = None) -> None:
+        # force_rules: [{"pattern": 正規表現, "tools": [ツール名...]}]。依頼が一致したら、最初の1回はそのツールの呼び出しを強制する
+        self.force_rules = [(re.compile(r["pattern"]), list(r["tools"])) for r in (force_rules or [])]
         self.llm, self.registry, self.audit = llm, registry, audit
         self.max_tool_calls, self.max_llm_turns = max_tool_calls, max_llm_turns
         self.slots = slots or SlotPool()
@@ -79,6 +81,14 @@ class Agent:
                          tool_calls=result.tool_calls, result_summary=result.answer[:200])
         return result
 
+    def _forced_tools(self, request: str) -> set[str]:
+        """依頼に一致するルールのツール名（登録済みのものだけ）。無ければ空。"""
+        names: set[str] = set()
+        for pattern, tools in self.force_rules:
+            if pattern.search(request):
+                names.update(t for t in tools if self.registry.get(t))
+        return names
+
     def _cancelled(self, rid: str, res: AgentResult, emit: EventCallback) -> bool:
         """中止が要求されていれば結果を整えて True を返す。"""
         if not self.tracker.is_cancelled(rid):
@@ -96,11 +106,17 @@ class Agent:
         res = AgentResult(request_id=rid, answer="")
         tools = self.registry.openai_tools()
         retried = False
-        for _ in range(self.max_llm_turns):
+        forced = self._forced_tools(request)
+        if forced:
+            self.audit.write("forced_tools", rid, tools=sorted(forced))
+        for turn in range(self.max_llm_turns):
             if self._cancelled(rid, res, emit):
                 return res
             try:
-                msg = self.llm.chat(messages, tools)
+                if turn == 0 and forced:  # 最初の1回だけ、該当ツールの呼び出しを強制する（記憶で答えさせない）
+                    msg = self.llm.chat(messages, [t for t in tools if t["function"]["name"] in forced], tool_choice="required")
+                else:
+                    msg = self.llm.chat(messages, tools)
             except LLMError as e:
                 res.stopped_reason, res.answer = "llm_error", f"モデルに接続できませんでした: {e}"
                 return res

@@ -14,10 +14,11 @@ class ScriptedLLM:
     """あらかじめ決めた assistant メッセージを順に返すモック。"""
 
     def __init__(self, script):
-        self.script, self.seen = list(script), []
+        self.script, self.seen, self.calls = list(script), [], []
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, tool_choice=None):
         self.seen.append([dict(m) for m in messages])
+        self.calls.append({"tools": [t["function"]["name"] for t in tools or []], "tool_choice": tool_choice})
         return self.script.pop(0) if self.script else {"role": "assistant", "content": "終了"}
 
 
