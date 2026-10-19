@@ -14,7 +14,7 @@
    - 環境変数 `GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1`（Vulkan バックエンド）
    - `--jinja` あり。`-c 65536` を `-np 2` で分けるため 1 スロット 32,768 トークン
    - `%DEV%` は起動用バッチ側で設定される値。接続側（このアプリ）は参照しない
-   - ビルド番号: **未記入**（`llama-server --version` で確認する）
+   - ビルド番号: b10540（ぴぐみさん確認）
 2. `ASSISTANT_INTEGRATION=1 python -m pytest -m integration` で「GPUの状態は？」が host_status を呼ぶことを確認する
 3. 呼ばれない・引数が壊れる場合は、`core/llm.py` の層を差し替えて GBNF 方式に切り替える（エージェントループは変更不要）
 
