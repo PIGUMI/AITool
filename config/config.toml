@@ -18,6 +18,7 @@ chat_template_kwargs = { enable_thinking = false }
 [agent]
 max_tool_calls = 20           # 1回の依頼で実行できるツール呼び出しの上限
 max_llm_turns = 25            # モデルへの問い合わせ回数の上限（無限ループ防止）
+approval_ttl_seconds = 600    # R2 の承認要求の有効期限（10分）
 
 # 9B が記憶や推測で答えてしまうのを防ぐ。依頼が pattern（正規表現）に一致したら、最初の1回は tools のどれかの呼び出しを強制する。
 [[agent.force_tools]]

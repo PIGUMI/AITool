@@ -50,4 +50,4 @@ def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = N
                         cfg["llm"].get("timeout_seconds", 120), extra=llm_extra(cfg))
     slots = SlotPool(cfg["slots"]["interactive"], cfg["slots"]["batch"])
     return Agent(llm, build_registry(cfg, audit), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots,
-                 force_rules=cfg["agent"].get("force_tools", []))
+                 force_rules=cfg["agent"].get("force_tools", []), approval_ttl=cfg["agent"].get("approval_ttl_seconds", 600))

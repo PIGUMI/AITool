@@ -10,6 +10,7 @@ from typing import Any, Callable
 from policy.levels import Disposition, decide
 from policy.registry import ToolRegistry
 
+from .approvals import ApprovalManager
 from .audit import AuditLog
 from .llm import LLMClient, LLMError
 from .prompts import SYSTEM_PROMPT
@@ -50,13 +51,15 @@ def _wrap(name: str, payload: Any) -> str:
 class Agent:
     def __init__(self, llm: LLMClient, registry: ToolRegistry, audit: AuditLog,
                  max_tool_calls: int = 20, max_llm_turns: int = 25,
-                 slots: SlotPool | None = None, force_rules: list[dict[str, Any]] | None = None) -> None:
+                 slots: SlotPool | None = None, force_rules: list[dict[str, Any]] | None = None,
+                 approval_ttl: float = 600.0) -> None:
         # force_rules: [{"pattern": 正規表現, "tools": [ツール名...]}]。依頼が一致したら、最初の1回はそのツールの呼び出しを強制する
         self.force_rules = [(re.compile(r["pattern"]), list(r["tools"])) for r in (force_rules or [])]
         self.llm, self.registry, self.audit = llm, registry, audit
         self.max_tool_calls, self.max_llm_turns = max_tool_calls, max_llm_turns
         self.slots = slots or SlotPool()
         self.tracker = RunTracker()
+        self.approvals = ApprovalManager(audit, registry, ttl=approval_ttl)
 
     def run(self, request: str, slot: str = "interactive", on_event: EventCallback | None = None,
             device: str = "-") -> AgentResult:
@@ -180,9 +183,13 @@ class Agent:
         if disp is Disposition.DENIED:
             return finish("denied", {"error": "このツールは実行できません"}, spec.level.name, args)
         if disp is Disposition.REQUIRES_APPROVAL:
-            # R2の承認フローはフェーズ3。それまでは実行しない。
-            return finish("approval_required", {"executed": False, "message": "承認が必要な操作です。承認機能は未実装のため実行していません。"},
-                          spec.level.name, args)
+            # R2は実行しない。承認要求を作り、ユーザーが承認画面で承認したときに、保存した操作が1回だけ実行される。
+            summary = spec.summarizer(args) if spec.summarizer else ""
+            ap = self.approvals.request(rid, name, args, summary)
+            emit({"type": "approval", "approval_id": ap["id"], "tool": name, "summary": ap["summary"]})
+            return finish("approval_required", {"executed": False, "approval_id": ap["id"], "expires_in_seconds": int(self.approvals.ttl),
+                                                "message": "承認が必要な操作です。まだ実行していません。ユーザーが管理画面の「承認」で許可すると実行されます。"
+                                                           "実行したと言ってはいけません。"}, spec.level.name, args)
         try:
             out = spec.handler(args)
         except Exception as e:  # ツールの失敗はモデルに返し、ループは続ける

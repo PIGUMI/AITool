@@ -66,7 +66,8 @@ def test_r2_tool_not_executed_without_approval(audit):
     ag, llm, ran = make(audit, [msg(tool_call("danger", {})), final("実行していません")])
     ag.run("消して")
     assert "DANGER" not in ran
-    assert events(audit)[1]["status"] == "approval_required"
+    assert next(e for e in events(audit) if e["event"] == "tool_call")["status"] == "approval_required"
+    assert any(e["event"] == "approval_requested" and e["tool"] == "danger" for e in events(audit))
     assert "実行していません" in llm.seen[1][-1]["content"]
 
 

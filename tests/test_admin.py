@@ -183,3 +183,70 @@ def test_bad_audit_params(srv):
     with pytest.raises(urllib.error.HTTPError) as e:
         get(base + "/api/audit?limit=abc", token)
     assert e.value.code == 400
+
+
+# --- 承認 API ---
+@pytest.fixture
+def srv_r2(tmp_path, audit):
+    ran = []
+    reg = reg_with()
+    reg.register(ToolSpec("danger", "d", {"type": "object", "properties": {"x": {"type": "integer"}}, "additionalProperties": False}, Level.R2,
+                          lambda a: ran.append(a) or {"done": a.get("x")}, summarizer=lambda a: f"x={a.get('x')} を実行"))
+    agent = Agent(ScriptedLLM([]), reg, audit)
+    store = TokenStore(tmp_path / "t.json")
+    token = store.add("phone")
+    store.add("tablet")
+    s = make_server(agent, store, "127.0.0.1", 0)
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{s.server_address[1]}", token, agent, ran
+    s.shutdown()
+
+
+def post(url, token, body=None):
+    req = urllib.request.Request(url, data=json.dumps(body or {}).encode(), headers={"Authorization": f"Bearer {token}"}, method="POST")
+    return urllib.request.urlopen(req, timeout=10)
+
+
+def test_approval_endpoints_require_token(srv_r2):
+    base, token, agent, ran = srv_r2
+    ap = agent.approvals.request("r1", "danger", {"x": 1})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(base + f"/api/approvals/{ap['id']}/approve", None, {"hash": ap["hash"]})
+    assert e.value.code == 401 and ran == []
+    with pytest.raises(urllib.error.HTTPError) as e:
+        get(base + "/api/approvals")
+    assert e.value.code == 401
+
+
+def test_approve_via_api_runs_once_and_second_call_conflicts(srv_r2):
+    base, token, agent, ran = srv_r2
+    ap = agent.approvals.request("r1", "danger", {"x": 1}, "x=1 を実行")
+    listed = json.load(get(base + "/api/approvals", token))["approvals"]
+    assert listed[0]["id"] == ap["id"] and listed[0]["summary"] == "x=1 を実行" and listed[0]["status"] == "pending"
+    out = json.load(post(base + f"/api/approvals/{ap['id']}/approve", token, {"hash": ap["hash"]}))
+    assert out["ok"] and ran == [{"x": 1}]
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(base + f"/api/approvals/{ap['id']}/approve", "x", {"hash": ap["hash"]})
+    assert e.value.code == 401
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(base + f"/api/approvals/{ap['id']}/approve", token, {"hash": ap["hash"]})
+    assert e.value.code == 409 and ran == [{"x": 1}]
+
+
+@pytest.mark.parametrize("body", [{}, {"hash": "wrong"}, {"hash": ""}])
+def test_approve_without_matching_hash_is_refused(srv_r2, body):
+    base, token, agent, ran = srv_r2
+    ap = agent.approvals.request("r1", "danger", {"x": 1})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(base + f"/api/approvals/{ap['id']}/approve", token, body)
+    assert e.value.code == 409 and ran == [] and agent.approvals.get(ap["id"])["status"] == "pending"
+
+
+def test_reject_and_unknown_id_via_api(srv_r2):
+    base, token, agent, ran = srv_r2
+    ap = agent.approvals.request("r1", "danger", {"x": 1})
+    assert json.load(post(base + f"/api/approvals/{ap['id']}/reject", token))["status"] == "rejected"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        post(base + "/api/approvals/nope/approve", token, {"hash": "x"})
+    assert e.value.code == 404
+    assert json.load(get(base + "/api/dashboard", token))["approvals_pending"] == 0

@@ -52,6 +52,7 @@ document.getElementById('f').onsubmit = async e => {
         if (!line.startsWith('data: ')) continue;
         const ev = JSON.parse(line.slice(6));
         if (ev.type === 'tool') add('tool', `ツール ${ev.tool}: ${ev.status}`);
+        else if (ev.type === 'approval') { const d = add('err', `承認が必要です: ${ev.summary}（まだ実行していません）`); const a = document.createElement('a'); a.href = '/admin'; a.textContent = ' 承認画面を開く'; a.style.color = 'var(--accent)'; d.appendChild(a); }
         else if (ev.type === 'message') add('bot', ev.text);
         else if (ev.type === 'error') add('err', ev.text);
       }

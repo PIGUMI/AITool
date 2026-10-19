@@ -51,10 +51,20 @@ async function api(path, method = 'GET') {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { Authorization: 'Bearer ' + store.get(), 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
 const fmt = t => t ? new Date(t * 1000).toLocaleString('ja-JP') : '-';
 const dur = r => r.finished_at ? ((r.finished_at - r.started_at).toFixed(1) + '秒') : '実行中';
 
-const tabs = { runs: '作業', audit: '監査ログ', dashboard: 'ダッシュボード', tools: 'ツール', devices: '端末' };
+const tabs = { runs: '作業', approvals: '承認', audit: '監査ログ', dashboard: 'ダッシュボード', tools: 'ツール', devices: '端末' };
+// 承認待ちの件数をタブに出す（どのタブにいても気づけるように）
+async function badge_() { try { const { approvals } = await api('/api/approvals'); const n = approvals.filter(a => a.status === 'pending').length;
+  for (const b of $('tabs').children) if (b.dataset.k === 'approvals') b.textContent = n ? `承認 (${n})` : '承認'; } catch {} }
+setInterval(badge_, 5000);
 let current = 'runs', timer = null;
 for (const [k, v] of Object.entries(tabs)) { const b = el('button', '', v); b.dataset.k = k; b.onclick = () => show(k); $('tabs').appendChild(b); }
 
@@ -85,6 +95,30 @@ const views = {
           more.append(el('div', 'mute', '監査ログ'));
           for (const a of d.audit) { const line = el('div', 'row'); line.append(badge(a.status || a.event), el('span', 'grow', [a.event, a.tool, a.level].filter(Boolean).join(' · ')), el('span', 'mute', (a.ts || '').slice(11, 19))); more.appendChild(line); }
         };
+        box.appendChild(c);
+      }
+      v.replaceChildren(box);
+    };
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 3000);
+  },
+
+  async approvals(v) {
+    const draw = async () => {
+      const { approvals, ttl_seconds } = await api('/api/approvals'), box = el('div');
+      box.appendChild(el('p', 'mute', `影響のある操作（R2）は、ここで承認するまで実行されません。承認は1回限りで、${Math.round(ttl_seconds / 60)}分で期限切れになります。`));
+      if (!approvals.length) box.appendChild(el('p', 'mute', '承認待ちはありません。'));
+      for (const a of approvals) {
+        const c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(a.status), el('strong', 'grow', a.tool), el('span', 'mute', `ID ${a.id}`));
+        c.append(top, el('p', '', a.summary), el('div', 'mute', '引数'), el('pre', '', JSON.stringify(a.args, null, 2)),
+                 el('div', 'mute', `操作ハッシュ ${a.hash.slice(0, 16)}…（承認時にこのハッシュと一致した操作だけが実行されます）`));
+        if (a.status === 'pending') {
+          const left = Math.max(0, Math.round(a.expires_at - Date.now() / 1000));
+          const row = el('div', 'row'), ok = el('button', '', '承認して実行'), no = el('button', 'danger', '却下');
+          ok.onclick = async () => { ok.disabled = no.disabled = true; try { await post(`/api/approvals/${a.id}/approve`, { hash: a.hash }); } catch (e) { alert('承認できませんでした: ' + e.message); } draw(); badge_(); };
+          no.onclick = async () => { ok.disabled = no.disabled = true; try { await post(`/api/approvals/${a.id}/reject`); } catch (e) { alert('却下できませんでした: ' + e.message); } draw(); badge_(); };
+          row.append(ok, no, el('span', 'mute', `残り約${Math.ceil(left / 60)}分`)); c.appendChild(row);
+        } else if (a.result_summary) c.append(el('div', 'mute', `結果（${a.decided_by || '-'}）`), el('pre', '', a.result_summary));
         box.appendChild(c);
       }
       v.replaceChildren(box);

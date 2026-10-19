@@ -35,6 +35,7 @@ def dashboard(agent: Agent) -> dict[str, Any]:
         except Exception as e:  # 1つの失敗で画面全体を壊さない
             out[name] = {"error": f"{type(e).__name__}: {e}"}
     out["runs_running"] = sum(1 for r in agent.tracker.list() if r["status"] == "running")
+    out["approvals_pending"] = agent.approvals.pending_count()
     return out
 
 
@@ -105,6 +106,8 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> Threa
                 self._json(200, dashboard(agent))
             elif path == "/api/devices":
                 self._json(200, {"devices": tokens.devices()})
+            elif path == "/api/approvals":
+                self._json(200, {"approvals": agent.approvals.list(), "ttl_seconds": agent.approvals.ttl})
             else:
                 self._json(404, {"error": "not found"})
 
@@ -118,6 +121,22 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> Threa
                 ok = agent.tracker.cancel(rid)
                 agent.audit.write("cancel_requested", rid, device=device, accepted=ok)
                 return self._json(200 if ok else 404, {"cancel_requested": ok})
+            if path.startswith("/api/approvals/") and path.rsplit("/", 1)[-1] in ("approve", "reject"):
+                device = self._auth()
+                if not device:
+                    return
+                aid, action = path.split("/")[3], path.rsplit("/", 1)[-1]
+                if action == "reject":
+                    out = agent.approvals.reject(aid, device)
+                else:
+                    try:
+                        n = int(self.headers.get("Content-Length", "0"))
+                        shown = str(json.loads(self.rfile.read(n) or b"{}").get("hash", "")) if 0 < n <= MAX_BODY else ""
+                    except (ValueError, TypeError, AttributeError):
+                        shown = ""
+                    out = agent.approvals.approve(aid, shown, device)  # 画面で見せたハッシュと一致したときだけ実行される
+                code = 200 if out.get("ok") else (404 if out.get("error") == "not_found" else 409)
+                return self._json(code, out)
             if path != "/api/chat":
                 return self._json(404, {"error": "not found"})
             device = self._auth()

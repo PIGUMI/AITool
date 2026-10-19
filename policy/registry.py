@@ -16,6 +16,7 @@ class ToolSpec:
     input_schema: dict[str, Any]
     level: Level | None
     handler: Callable[[dict[str, Any]], Any]
+    summarizer: Callable[[dict[str, Any]], str] | None = None  # R2: 承認画面に出す「何をするか」の要約
 
 
 class ToolRegistry:
