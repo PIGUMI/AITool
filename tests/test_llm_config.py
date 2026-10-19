@@ -73,3 +73,20 @@ def test_slots_separate_interactive_and_batch():
         with pytest.raises(SlotBusy):
             with pool.acquire("batch", timeout=0.1):
                 pass
+
+
+def test_extra_request_fields_and_finish_reason():
+    seen = {}
+
+    def t(url, h, p, to):
+        seen.update(p)
+        return {"choices": [{"message": {"role": "assistant", "content": "x"}, "finish_reason": "stop"}]}
+
+    m = LLMClient(["http://a/v1"], KEY, transport=t, extra={"chat_template_kwargs": {"enable_thinking": False}}).chat([])
+    assert seen["chat_template_kwargs"] == {"enable_thinking": False} and m["_finish_reason"] == "stop"
+
+
+def test_config_disables_thinking_for_requests():
+    from core.app import llm_extra
+
+    assert llm_extra(load_config()) == {"chat_template_kwargs": {"enable_thinking": False}}

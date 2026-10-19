@@ -19,3 +19,16 @@
 3. 呼ばれない・引数が壊れる場合は、`core/llm.py` の層を差し替えて GBNF 方式に切り替える（エージェントループは変更不要）
 
 結果: **未記入**
+
+## 実機テストの結果（2026-10-19、b10540）
+- 接続・認証・ツール呼び出し（host_status）は動作した（`tool_calls=1`、状態 ok）。
+- 失敗: ツール結果を渡した後の最終回答が空文字（`stopped_reason='done'` のまま `answer=''`）。
+- **原因は未特定**。この環境から llama-server に届かず、生のレスポンスをまだ見ていない。候補:
+  1. 本文が空で、思考（`reasoning_content`）だけが返っている
+  2. `content` が null
+  3. ツール結果メッセージの形式とチャットテンプレートの不整合
+- 対応（フェーズ1、仮説に基づく）:
+  - リクエストに `chat_template_kwargs: {enable_thinking: false}` を足す（config の `[llm.request]`。効果は実機で未確認）
+  - 空の最終回答は、回答を促して1回だけ再試行し、それでも空なら `empty_response` として報告する（「完了」にしない）。空の応答の形（キー、finish_reason、思考の文字数）は監査ログに残る
+  - 本文の `<think>…</think>` は取り除く
+- 次の一手（ぴぐみさんのPCで実行）: `python -m core.diagnose "GPUの状態は？"` → `logs/diagnose-*.json` に生のやり取りが残る（APIキーは含まれない）。この内容でここを書き直す。

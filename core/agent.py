@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -26,6 +27,15 @@ class AgentResult:
     tool_calls: int = 0
     stopped_reason: str = "done"  # done / tool_limit / turn_limit / llm_error
     trace: list[dict[str, Any]] = field(default_factory=list)
+
+
+_THINK = re.compile(r"<think>.*?(</think>|$)", re.S)
+RETRY_PROMPT = "ツールの結果に基づいて、最終回答を日本語で簡潔に述べてください。"
+
+
+def _final_text(msg: dict[str, Any]) -> str:
+    """本文を取り出す。content が null・空、または思考タグだけの場合は空文字を返す。"""
+    return _THINK.sub("", msg.get("content") or "").strip()
 
 
 def _wrap(name: str, payload: Any) -> str:
@@ -62,6 +72,7 @@ class Agent:
         ]
         res = AgentResult(request_id=rid, answer="")
         tools = self.registry.openai_tools()
+        retried = False
         for _ in range(self.max_llm_turns):
             try:
                 msg = self.llm.chat(messages, tools)
@@ -70,7 +81,17 @@ class Agent:
                 return res
             calls = msg.get("tool_calls") or []
             if not calls:
-                res.answer = msg.get("content") or ""
+                res.answer = _final_text(msg)
+                if not res.answer:
+                    # 空の最終回答：形だけを記録し（本文は記録しない）、1回だけ回答を促す
+                    self.audit.write("empty_response", rid, message_keys=sorted(msg), finish_reason=msg.get("_finish_reason"),
+                                     reasoning_chars=len(msg.get("reasoning_content") or ""), retried=retried)
+                    if not retried:
+                        retried = True
+                        messages.append({"role": "user", "content": RETRY_PROMPT})
+                        continue
+                    res.stopped_reason = "empty_response"
+                    res.answer = "モデルが空の応答を返しました。ツールは実行済みです。詳細は監査ログと診断（python -m core.diagnose）を確認してください。"
                 emit({"type": "message", "text": res.answer})
                 return res
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})

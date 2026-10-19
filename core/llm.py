@@ -23,18 +23,21 @@ class LLMClient:
     """複数の接続先を順に試す chat/completions クライアント。"""
 
     def __init__(self, endpoints: list[str], api_key: str, model: str = "qwen3.5-9b",
-                 timeout: float = 120, transport: Transport | None = None) -> None:
+                 timeout: float = 120, transport: Transport | None = None,
+                 extra: dict[str, Any] | None = None) -> None:
         self.endpoints = [e.rstrip("/") for e in endpoints]
         self._api_key = api_key
         self.model = model
         self.timeout = timeout
         self._transport = transport or _urllib_transport
+        self.extra = dict(extra or {})  # 例: {"chat_template_kwargs": {"enable_thinking": False}}
 
     def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """assistant メッセージ（dict）を返す。"""
         payload: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": 0.2}
         if tools:
             payload["tools"] = tools
+        payload.update(self.extra)
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self._api_key}"}
         failures: list[str] = []
         for base in self.endpoints:
@@ -44,7 +47,8 @@ class LLMClient:
                 failures.append(f"{base}: {type(e).__name__}")
                 continue
             try:
-                return data["choices"][0]["message"]
+                choice = data["choices"][0]
+                return {**choice["message"], "_finish_reason": choice.get("finish_reason")}
             except (KeyError, IndexError, TypeError) as e:
                 raise LLMError(f"{base}: 応答の形式が不正です") from e
         raise LLMError("どの接続先にも繋がりません: " + ", ".join(failures))

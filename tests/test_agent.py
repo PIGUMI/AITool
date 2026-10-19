@@ -132,3 +132,27 @@ def test_system_prompt_has_tone_and_length_rules_with_principles_first_priority(
     assert "JARVIS" in P and "要点から" in P and "聞かれていない情報" in P and "1〜3文" in P
     assert "知らないことは知らないと言います" in P and "推測です" in P
     assert P.index("最優先の原則") > P.index("口調と長さ") and "常に優先" in P
+
+
+def test_empty_final_answer_is_retried_once_then_answers(audit):
+    ag, llm, _ = make(audit, [msg(tool_call("echo", {"x": 1})), {"role": "assistant", "content": None, "reasoning_content": "考え中"},
+                              final("GPUは正常です")])
+    r = ag.run("x")
+    assert r.answer == "GPUは正常です" and r.stopped_reason == "done"
+    assert llm.seen[-1][-1] == {"role": "user", "content": __import__("core.agent", fromlist=["x"]).RETRY_PROMPT}
+    ev = [e for e in events(audit) if e["event"] == "empty_response"][0]
+    assert ev["message_keys"] == ["content", "reasoning_content", "role"] and ev["retried"] is False
+
+
+def test_empty_twice_is_not_reported_as_done(audit):
+    ag, _, _ = make(audit, [msg(tool_call("echo", {"x": 1})), final(""), final("  ")])
+    r = ag.run("x")
+    assert r.stopped_reason == "empty_response" and "空の応答" in r.answer
+
+
+def test_think_only_content_counts_as_empty_and_think_is_stripped(audit):
+    ag, _, _ = make(audit, [final("<think>考えている途中…")])
+    ag2, _, _ = make(audit, [final("<think>理由</think>結論です")])
+    ag.run("x")
+    assert any(e["event"] == "empty_response" for e in events(audit))  # 思考だけの本文は空扱い
+    assert ag2.run("x").answer == "結論です"

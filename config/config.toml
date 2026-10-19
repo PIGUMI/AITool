@@ -11,6 +11,10 @@ api_key_file = "llama_api_key.txt"
 model = "qwen3.5-9b"          # 読み込まれているモデルは1つだけなので値は何でもよい
 timeout_seconds = 120
 
+[llm.request]
+# chat/completions にそのまま足す項目。Qwen3.5 の思考出力を切る設定（空の回答になる問題の対策。実機で効果を確認する）
+chat_template_kwargs = { enable_thinking = false }
+
 [agent]
 max_tool_calls = 20           # 1回の依頼で実行できるツール呼び出しの上限
 max_llm_turns = 25            # モデルへの問い合わせ回数の上限（無限ループ防止）
