@@ -120,6 +120,15 @@ wikipedia_langs = ["ja", "en"]
 searxng_url = ""              # 例: "http://192.168.0.13:8888"（SearXNG の settings で formats に json を追加しておく）
 timeout_seconds = 10
 
+[web_render]
+# JavaScriptで描画されるページを、ヘッドレスの Edge/Chrome で描画して読む（R0・読み取りのみ）。
+# 接続先は取得対象のホストだけに固定され、LAN・ローカル・Tailscale には届かない。ブラウザが見つからなければ無効。
+# browser_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"   # 省略すると自動検出
+timeout_seconds = 30
+script_wait_ms = 6000             # 描画後にスクリプトの実行を待つ時間（仮想時間）
+max_chars = 8000
+min_free_memory_mb = 1000         # 空きメモリがこれを下回るときは起動しない（仮の値）
+
 [web]
 # web_fetch（R0, GETのみ）。LAN・ローカル・Tailscaleのアドレスは設定に関わらず常に拒否する。
 timeout_seconds = 10
