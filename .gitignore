@@ -16,3 +16,11 @@ logs/
 audit/
 build/
 dist/
+# アプリ（Android Studio / Gradle の生成物・ローカル設定・署名）、証明書
+.gradle/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+*.crt

@@ -52,6 +52,11 @@ directory = "logs/audit"
 [api]
 hosts = ["127.0.0.1", "192.168.0.13", "100.84.113.46"]
 port = 8765
+# HTTPS（Android で「アプリとしてインストール」するのに必要）。Tailscale の証明書を使う場合は docs/app-setup.md を参照。
+# 両方を設定すると tls_hosts のアドレス（省略すると hosts 全て）が HTTPS になる。例:
+# tls_cert = "C:\\Users\\user\\.assistant\\secrets\\faraway.crt"
+# tls_key = "C:\\Users\\user\\.assistant\\secrets\\faraway.key"
+# tls_hosts = ["100.84.113.46"]
 tokens_file = "api_tokens.json"   # secrets ディレクトリ内。端末ごとのトークンのハッシュを保存
 
 [host_status]

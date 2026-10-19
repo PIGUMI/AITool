@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1419">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>Faraway</title>
 <style>
   :root { --bg:#0f1419; --panel:#1a2129; --text:#e6edf3; --mute:#8b98a5; --accent:#4cc2ff; --user:#24313d; --err:#ff7b72; }
@@ -32,6 +36,8 @@ const get = () => { try { return localStorage.getItem('assistant_token') || ''; 
 const set = v => { try { localStorage.setItem('assistant_token', v); } catch {} };
 // ペアリングURL（…/#token=xxxx）から開いたら、トークンを保存してアドレス欄から消す（#以降はサーバーに送られない）
 (() => { const m = location.hash.match(/token=([^&]+)/); if (m) { set(decodeURIComponent(m[1])); history.replaceState(null, '', location.pathname); } })();
+// アプリとしてインストールできるようにする（HTTPS のときだけ有効。HTTP では何も起きない）
+try { if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js'); } catch (e) {}
 function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
 document.getElementById('tok').onclick = () => { const v = prompt('APIトークンを入力（この端末のブラウザにだけ保存されます）', ''); if (v !== null) set(v.trim()); };
 document.getElementById('f').onsubmit = async e => {

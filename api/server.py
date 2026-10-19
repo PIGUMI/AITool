@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import queue
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,7 +20,14 @@ from core.slots import SlotBusy
 from .tokens import TokenStore
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
-PAGES = {"/": "index.html", "/index.html": "index.html", "/admin": "admin.html", "/admin.html": "admin.html"}
+HTML = "text/html; charset=utf-8"
+# 認証なしで配る静的ファイル（画面本体・PWA 用）。トークンは画面側（ブラウザ）が持ち、API 呼び出しにだけ付ける。
+STATIC = {
+    "/": ("index.html", HTML), "/index.html": ("index.html", HTML), "/admin": ("admin.html", HTML), "/admin.html": ("admin.html", HTML),
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
+    "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
+    "/icon-192.png": ("icon-192.png", "image/png"), "/icon-512.png": ("icon-512.png", "image/png"),
+}
 MAX_BODY = 64 * 1024
 
 
@@ -69,10 +77,11 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
         def do_GET(self) -> None:
             url = urlsplit(self.path)
             path, qs = url.path, {k: v[0] for k, v in parse_qs(url.query).items()}
-            if path in PAGES:
-                body = (UI_DIR / PAGES[path]).read_bytes()
+            if path in STATIC:
+                name, ctype = STATIC[path]
+                body = (UI_DIR / name).read_bytes()
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -197,6 +206,14 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
     return ThreadingHTTPServer((host, port), Handler)
 
 
+def enable_tls(server: ThreadingHTTPServer, cert_file: str, key_file: str) -> None:
+    """待ち受けソケットを TLS にする（Tailscale の証明書など。HTTPS のときだけ PWA としてインストールできる）。"""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert_file, key_file)
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+
+
 def main() -> None:
     from core.app import build_agent
     from core.config import load_config
@@ -206,12 +223,15 @@ def main() -> None:
     agent = build_agent()
     store = TokenStore(secrets_dir() / cfg["api"]["tokens_file"])
     hosts = cfg["api"].get("hosts") or [cfg["api"]["host"]]
+    api = cfg["api"]
+    tls_on = bool(api.get("tls_cert") and api.get("tls_key"))
+    tls_hosts = set(api.get("tls_hosts") or hosts) if tls_on else set()   # TLS にするアドレス（省略すると全て）
     if not store.devices():  # 初回起動: トークンを自動発行し、開くだけで使えるURLを表示する
         token = store.add("auto-first")
         print("初回のためAPIトークンを自動発行しました。スマホのブラウザで次のURLを開くと設定されます（このURLは他人に見せないこと）:")
         for h in hosts:
             if h != "127.0.0.1":
-                print(f"  http://{h}:{cfg['api']['port']}/#token={token}")
+                print(f"  {'https' if h in tls_hosts else 'http'}://{h}:{api['port']}/#token={token}")
     jobs = None
     batch = cfg.get("batch", {})
     if batch.get("enabled", True):  # 夜間バッチ（時間帯は仮。config の [batch]）
@@ -221,9 +241,12 @@ def main() -> None:
     servers = []
     for h in hosts:  # LAN と Tailscale など、待ち受けるアドレスごとに1つ起動する
         try:
-            servers.append(make_server(agent, store, h, cfg["api"]["port"], jobs))
-            print(f"listening on {h}:{cfg['api']['port']}")
-        except OSError as e:  # 例: Tailscale が停止中でアドレスが無い。他のアドレスは続ける
+            srv = make_server(agent, store, h, cfg["api"]["port"], jobs)
+            if h in tls_hosts:
+                enable_tls(srv, api["tls_cert"], api["tls_key"])
+            servers.append(srv)
+            print(f"listening on {h}:{cfg['api']['port']}" + (" (HTTPS)" if h in tls_hosts else ""))
+        except (OSError, ssl.SSLError) as e:  # 例: Tailscale が停止中でアドレスが無い。他のアドレスは続ける
             print(f"skip {h}: {e.strerror or type(e).__name__}")
     if not servers:
         raise SystemExit("待ち受けできるアドレスがありません")

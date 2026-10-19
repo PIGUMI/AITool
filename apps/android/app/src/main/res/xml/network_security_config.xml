@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Faraway サーバーは LAN / Tailscale の中の HTTP（または HTTPS）で動く。
+  このアプリは、利用者が設定したサーバー以外のページを WebView 内で開かない（MainActivity で制限）。
+  そのため HTTP（暗号化なし）も許可する。Tailscale 経由の通信は WireGuard で暗号化される。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

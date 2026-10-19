@@ -250,3 +250,81 @@ def test_reject_and_unknown_id_via_api(srv_r2):
         post(base + "/api/approvals/nope/approve", token, {"hash": "x"})
     assert e.value.code == 404
     assert json.load(get(base + "/api/dashboard", token))["approvals_pending"] == 0
+
+
+# --- PWA（アプリとしてインストール）用の静的ファイル ---
+@pytest.mark.parametrize("path,ctype", [("/manifest.webmanifest", "application/manifest+json"), ("/sw.js", "text/javascript"),
+                                        ("/icon-192.png", "image/png"), ("/icon-512.png", "image/png")])
+def test_pwa_files_are_served_without_token_with_right_types(srv, path, ctype):
+    base, *_ = srv
+    r = get(base + path)
+    assert r.status == 200 and r.headers["Content-Type"].startswith(ctype) and int(r.headers["Content-Length"]) > 0
+
+
+def test_manifest_is_installable_shape(srv):
+    base, *_ = srv
+    m = json.load(get(base + "/manifest.webmanifest"))
+    assert m["display"] == "standalone" and m["start_url"] == "/" and m["name"] == "Faraway"
+    sizes = {i["sizes"] for i in m["icons"]}
+    assert {"192x192", "512x512"} <= sizes
+    for i in m["icons"]:
+        assert get(base + i["src"]).status == 200
+    assert get(base + "/icon-512.png").read(8) == b"\x89PNG\r\n\x1a\n"
+
+
+def test_service_worker_never_caches(srv):
+    base, *_ = srv
+    sw = get(base + "/sw.js").read().decode()
+    assert "caches" not in sw and "cache.put" not in sw.lower()
+
+
+def test_pages_link_the_manifest(srv):
+    base, *_ = srv
+    for p in ("/", "/admin"):
+        html = get(base + p).read().decode()
+        assert 'rel="manifest"' in html and "/manifest.webmanifest" in html
+
+
+def test_api_still_requires_token_with_static_routes(srv):
+    base, *_ = srv
+    with pytest.raises(urllib.error.HTTPError) as e:
+        get(base + "/api/runs")
+    assert e.value.code == 401
+    with pytest.raises(urllib.error.HTTPError) as e:
+        get(base + "/ui/../config/config.toml")
+    assert e.value.code == 404
+
+
+# --- TLS ---
+def test_enable_tls_serves_https_and_rejects_plain_http(tmp_path, audit):
+    import shutil, ssl, subprocess
+    openssl = shutil.which("openssl") or r"C:\Program Files\Git\usr\bin\openssl.exe"
+    if not shutil.which(openssl) and not __import__("os").path.exists(openssl):
+        pytest.skip("openssl がない環境")
+    crt, key = tmp_path / "t.crt", tmp_path / "t.key"
+    subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(crt), "-days", "1",
+                    "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True)
+    from api.server import enable_tls
+    agent = Agent(ScriptedLLM([]), reg_with(), audit)
+    store = TokenStore(tmp_path / "t.json")
+    store.add("phone")
+    s = make_server(agent, store, "127.0.0.1", 0)
+    enable_tls(s, str(crt), str(key))
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        port = s.server_address[1]
+        ctx = ssl.create_default_context(cafile=str(crt))
+        r = urllib.request.urlopen(f"https://127.0.0.1:{port}/manifest.webmanifest", context=ctx, timeout=10)
+        assert r.status == 200
+        with pytest.raises((urllib.error.URLError, ConnectionError, OSError)):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
+    finally:
+        s.shutdown()
+
+
+def test_enable_tls_with_bad_files_raises(tmp_path, audit):
+    from api.server import enable_tls
+    s = make_server(Agent(ScriptedLLM([]), reg_with(), audit), (lambda st: (st.add("p"), st)[1])(TokenStore(tmp_path / "t.json")), "127.0.0.1", 0)
+    with pytest.raises(Exception):
+        enable_tls(s, str(tmp_path / "none.crt"), str(tmp_path / "none.key"))
+    s.server_close()
