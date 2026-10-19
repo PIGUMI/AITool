@@ -40,6 +40,14 @@ log_tail_lines = 200
 # 期待する形: {"temperature_c": 55, "utilization_percent": 30, "vram_used_mb": 9000, "vram_total_mb": 16384}
 gpu_command = []
 
+[web]
+# web_fetch（R0, GETのみ）。LAN・ローカル・Tailscaleのアドレスは設定に関わらず常に拒否する。
+timeout_seconds = 10
+max_bytes = 1000000           # 取得する本文の上限
+max_chars = 8000              # モデルに返すテキストの上限
+max_redirects = 4
+user_agent = "personal-assistant/0.1"
+
 [network]
 timeout_seconds = 2
 # 対象はここに列挙した機器だけ。LAN全体の走査はしない。

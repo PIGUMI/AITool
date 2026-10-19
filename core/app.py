@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from policy.registry import ToolRegistry
-from tools import host_status, network
+from tools import host_status, network, web_fetch
 
 from .agent import Agent
 from .audit import AuditLog
@@ -24,6 +24,7 @@ def build_registry(cfg: dict[str, Any]) -> ToolRegistry:
     reg = ToolRegistry()
     reg.register(host_status.build_tool(cfg.get("host_status", {}), cfg["llm"]["endpoints"]))
     reg.register(network.build_tool(cfg.get("network", {})))
+    reg.register(web_fetch.build_tool(cfg.get("web", {})))
     return reg
 
 
