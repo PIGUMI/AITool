@@ -64,7 +64,12 @@ if __name__ == "__main__":
     a = ap.parse_args()
     store = TokenStore(secrets_dir() / load_config()["api"]["tokens_file"])
     if a.action == "add":
-        print(f"トークン（この一度しか表示されません）: {store.add(a.device)}")
+        t = store.add(a.device)
+        print(f"トークン（この一度しか表示されません）: {t}")
+        cfg = load_config()["api"]
+        for h in cfg.get("hosts", []):
+            if h != "127.0.0.1":
+                print(f"  開くだけで設定されるURL: http://{h}:{cfg['port']}/#token={t}")
     elif a.action == "revoke":
         print("失効しました" if store.revoke(a.device) else "その端末はありません")
     else:

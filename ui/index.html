@@ -30,6 +30,8 @@
 const log = document.getElementById('log'), q = document.getElementById('q'), send = document.getElementById('send');
 const get = () => { try { return localStorage.getItem('assistant_token') || ''; } catch { return ''; } };
 const set = v => { try { localStorage.setItem('assistant_token', v); } catch {} };
+// ペアリングURL（…/#token=xxxx）から開いたら、トークンを保存してアドレス欄から消す（#以降はサーバーに送られない）
+(() => { const m = location.hash.match(/token=([^&]+)/); if (m) { set(decodeURIComponent(m[1])); history.replaceState(null, '', location.pathname); } })();
 function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
 document.getElementById('tok').onclick = () => { const v = prompt('APIトークンを入力（この端末のブラウザにだけ保存されます）', ''); if (v !== null) set(v.trim()); };
 document.getElementById('f').onsubmit = async e => {

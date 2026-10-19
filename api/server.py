@@ -105,6 +105,12 @@ def main() -> None:
     agent = build_agent()
     store = TokenStore(secrets_dir() / cfg["api"]["tokens_file"])
     hosts = cfg["api"].get("hosts") or [cfg["api"]["host"]]
+    if not store.devices():  # 初回起動: トークンを自動発行し、開くだけで使えるURLを表示する
+        token = store.add("auto-first")
+        print("初回のためAPIトークンを自動発行しました。スマホのブラウザで次のURLを開くと設定されます（このURLは他人に見せないこと）:")
+        for h in hosts:
+            if h != "127.0.0.1":
+                print(f"  http://{h}:{cfg['api']['port']}/#token={token}")
     servers = []
     for h in hosts:  # LAN と Tailscale など、待ち受けるアドレスごとに1つ起動する
         try:

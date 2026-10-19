@@ -28,7 +28,7 @@ batch = 1
 directory = "logs/audit"
 
 [api]
-host = "127.0.0.1"            # 外部公開しない。LAN/Tailscale に出すときだけ明示的に変える
+hosts = ["127.0.0.1", "192.168.0.13", "100.84.113.46"]
 port = 8765
 tokens_file = "api_tokens.json"   # secrets ディレクトリ内。端末ごとのトークンのハッシュを保存
 
