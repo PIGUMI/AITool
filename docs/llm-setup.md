@@ -1,4 +1,4 @@
-# llama.cpp 接続とツール呼び出しの検証
+﻿# llama.cpp 接続とツール呼び出しの検証
 
 ## 接続情報（値は config/config.toml、APIキーは secrets）
 - 接続先: LAN `http://192.168.0.13:8080/v1` → Tailscale `http://100.84.113.46:8080/v1`（この順に試す）
@@ -20,15 +20,10 @@
 
 結果: **未記入**
 
-## 実機テストの結果（2026-10-19、b10540）
-- 接続・認証・ツール呼び出し（host_status）は動作した（`tool_calls=1`、状態 ok）。
-- 失敗: ツール結果を渡した後の最終回答が空文字（`stopped_reason='done'` のまま `answer=''`）。
-- **原因は未特定**。この環境から llama-server に届かず、生のレスポンスをまだ見ていない。候補:
-  1. 本文が空で、思考（`reasoning_content`）だけが返っている
-  2. `content` が null
-  3. ツール結果メッセージの形式とチャットテンプレートの不整合
-- 対応（フェーズ1、仮説に基づく）:
-  - リクエストに `chat_template_kwargs: {enable_thinking: false}` を足す（config の `[llm.request]`。効果は実機で未確認）
-  - 空の最終回答は、回答を促して1回だけ再試行し、それでも空なら `empty_response` として報告する（「完了」にしない）。空の応答の形（キー、finish_reason、思考の文字数）は監査ログに残る
-  - 本文の `<think>…</think>` は取り除く
-- 次の一手（ぴぐみさんのPCで実行）: `python -m core.diagnose "GPUの状態は？"` → `logs/diagnose-*.json` に生のやり取りが残る（APIキーは含まれない）。この内容でここを書き直す。
+## 実機テストの結果（2026-10-20、b10540）
+- 統合テスト（`python -m pytest -m integration`）は通った。`core.cli` / `core.diagnose` でも最終回答が返る。
+- 診断の記録（`logs/diagnose-*.json`）: 1 回目は `finish_reason=tool_calls`、2 回目は `finish_reason=stop` で `content` 58 文字、`reasoning_content` なし。
+- 前回（2026-10-19）の空回答は、`[llm.request]` の `chat_template_kwargs: {enable_thinking: false}` と空回答の再試行を入れた後は再現していない。
+  変更前の生レスポンスは取っていないため、どれが決め手かは未確定（思考だけが返っていた説が有力だが推測）。
+- 残している保険: 空の最終回答は1回だけ再試行し、それでも空なら `empty_response` で報告する。`<think>…</think>` は取り除く。
+- 再発したら `python -m core.diagnose "GPUの状態は？"` で生のやり取りを記録して確認する。
