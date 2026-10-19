@@ -63,7 +63,7 @@ enabled = false
 ports = []
 
 [[network.devices]]
-name = "dev-pc"                # アドレスを設定してから有効にする
-address = ""
-enabled = false
+name = "dev-pc"
+address = "192.168.0.4"
+enabled = true
 ports = []
