@@ -1,0 +1,65 @@
+# アシスタント設定。シークレット（APIキー等）はここに書かない。
+# シークレットは %USERPROFILE%\.assistant\secrets\ から読む。
+
+[llm]
+# 先に書いた接続先から順に試す（LAN → Tailscale）
+endpoints = [
+  "http://192.168.0.13:8080/v1",
+  "http://100.84.113.46:8080/v1",
+]
+api_key_file = "llama_api_key.txt"
+model = "qwen3.5-9b"          # 読み込まれているモデルは1つだけなので値は何でもよい
+timeout_seconds = 120
+
+[agent]
+max_tool_calls = 20           # 1回の依頼で実行できるツール呼び出しの上限
+max_llm_turns = 25            # モデルへの問い合わせ回数の上限（無限ループ防止）
+
+[slots]
+# llama.cpp は 2 スロット。対話を1本、夜間バッチを1本に分ける。
+interactive = 1
+batch = 1
+
+[audit]
+directory = "logs/audit"
+
+[api]
+host = "127.0.0.1"            # 外部公開しない。LAN/Tailscale に出すときだけ明示的に変える
+port = 8765
+tokens_file = "api_tokens.json"   # secrets ディレクトリ内。端末ごとのトークンのハッシュを保存
+
+[host_status]
+disk_paths = ["C:\\"]
+log_files = []                # 直近エラーを見るログファイル
+log_tail_lines = 200
+# GPU取得コマンド（JSONを標準出力に出すもの）。未設定なら「取得不可」と答える。
+# 期待する形: {"temperature_c": 55, "utilization_percent": 30, "vram_used_mb": 9000, "vram_total_mb": 16384}
+gpu_command = []
+
+[network]
+timeout_seconds = 2
+# 対象はここに列挙した機器だけ。LAN全体の走査はしない。
+[[network.devices]]
+name = "resident-pc"
+address = "192.168.0.13"
+enabled = true
+ports = [8080]
+web = "http://192.168.0.13:8080/health"
+
+[[network.devices]]
+name = "raspberry-pi-5"        # 現在は未運用のため無効
+address = ""
+enabled = false
+ports = []
+
+[[network.devices]]
+name = "tl-sg105e"             # アドレスを設定してから有効にする
+address = ""
+enabled = false
+ports = []
+
+[[network.devices]]
+name = "dev-pc"                # アドレスを設定してから有効にする
+address = ""
+enabled = false
+ports = []
