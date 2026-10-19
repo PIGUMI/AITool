@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from policy.registry import ToolRegistry
-from tools import host_status, network, search, web_fetch
+from tools import audit_search, clock, host_status, network, repo, search, web_fetch
 
 from .agent import Agent
 from .audit import AuditLog
@@ -20,8 +20,13 @@ def llm_extra(cfg: dict[str, Any]) -> dict[str, Any]:
     return dict(cfg["llm"].get("request", {}))
 
 
-def build_registry(cfg: dict[str, Any]) -> ToolRegistry:
+def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None) -> ToolRegistry:
     reg = ToolRegistry()
+    reg.register(clock.build_tool())
+    reg.register(repo.build_read_tool(cfg.get("search", {})))
+    reg.register(repo.build_git_tool(cfg.get("search", {})))
+    if audit is not None:
+        reg.register(audit_search.build_tool(audit))
     reg.register(host_status.build_tool(cfg.get("host_status", {}), cfg["llm"]["endpoints"]))
     reg.register(network.build_tool(cfg.get("network", {})))
     reg.register(web_fetch.build_tool(cfg.get("web", {})))
@@ -38,4 +43,4 @@ def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = N
         llm = LLMClient(cfg["llm"]["endpoints"], key, cfg["llm"].get("model", "qwen3.5-9b"),
                         cfg["llm"].get("timeout_seconds", 120), extra=llm_extra(cfg))
     slots = SlotPool(cfg["slots"]["interactive"], cfg["slots"]["batch"])
-    return Agent(llm, build_registry(cfg), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots)
+    return Agent(llm, build_registry(cfg, audit), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots)
