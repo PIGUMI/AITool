@@ -13,6 +13,7 @@ from policy.registry import ToolRegistry
 from .audit import AuditLog
 from .llm import LLMClient, LLMError
 from .prompts import SYSTEM_PROMPT
+from .runs import RunTracker
 from .schema import validate
 from .slots import SlotPool
 
@@ -53,17 +54,39 @@ class Agent:
         self.llm, self.registry, self.audit = llm, registry, audit
         self.max_tool_calls, self.max_llm_turns = max_tool_calls, max_llm_turns
         self.slots = slots or SlotPool()
+        self.tracker = RunTracker()
 
-    def run(self, request: str, slot: str = "interactive", on_event: EventCallback | None = None) -> AgentResult:
-        """1件の依頼を処理する。"""
+    def run(self, request: str, slot: str = "interactive", on_event: EventCallback | None = None,
+            device: str = "-") -> AgentResult:
+        """1件の依頼を処理する。経過は tracker に残り、管理画面から中止できる。"""
         rid = uuid.uuid4().hex[:12]
-        emit = on_event or (lambda e: None)
-        self.audit.write("request", rid, request=request[:200], slot=slot)
-        with self.slots.acquire(slot):
-            result = self._loop(rid, request, emit)
+        user_emit = on_event or (lambda e: None)
+
+        def emit(ev: dict[str, Any]) -> None:
+            self.tracker.event(rid, ev)
+            user_emit(ev)
+
+        self.tracker.start(rid, request, slot, device)
+        self.audit.write("request", rid, request=request[:200], slot=slot, device=device)
+        try:
+            with self.slots.acquire(slot):
+                result = self._loop(rid, request, emit)
+        except BaseException:
+            self.tracker.finish(rid, "error", "", 0)
+            raise
+        self.tracker.finish(rid, result.stopped_reason, result.answer, result.tool_calls)
         self.audit.write("response", rid, request=request[:200], stopped_reason=result.stopped_reason,
                          tool_calls=result.tool_calls, result_summary=result.answer[:200])
         return result
+
+    def _cancelled(self, rid: str, res: AgentResult, emit: EventCallback) -> bool:
+        """中止が要求されていれば結果を整えて True を返す。"""
+        if not self.tracker.is_cancelled(rid):
+            return False
+        res.stopped_reason, res.answer = "cancelled", "管理画面からの要求で作業を中止しました。ここまでの実行内容は監査ログに記録されています。"
+        self.audit.write("cancelled", rid, tool_calls=res.tool_calls)
+        emit({"type": "message", "text": res.answer})
+        return True
 
     def _loop(self, rid: str, request: str, emit: EventCallback) -> AgentResult:
         messages: list[dict[str, Any]] = [
@@ -74,6 +97,8 @@ class Agent:
         tools = self.registry.openai_tools()
         retried = False
         for _ in range(self.max_llm_turns):
+            if self._cancelled(rid, res, emit):
+                return res
             try:
                 msg = self.llm.chat(messages, tools)
             except LLMError as e:
@@ -96,6 +121,8 @@ class Agent:
                 return res
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
             for call in calls:
+                if self._cancelled(rid, res, emit):
+                    return res
                 if res.tool_calls >= self.max_tool_calls:
                     res.stopped_reason = "tool_limit"
                     res.answer = (f"ツール呼び出しの上限（{self.max_tool_calls}回）に達したため停止しました。"

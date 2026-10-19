@@ -1,4 +1,7 @@
-"""コアのHTTP API（REST＋SSE）。APIトークン必須。画面は持たない（ui/ の静的ファイルを配るだけ）。"""
+"""コアのHTTP API（REST＋SSE）。APIトークン必須。画面は持たない（ui/ の静的ファイルを配るだけ）。
+
+管理用: /api/runs（作業一覧・詳細・中止）、/api/audit（監査ログ検索）、/api/tools、/api/dashboard、/api/devices。
+"""
 from __future__ import annotations
 
 import json
@@ -7,6 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from core.agent import Agent
 from core.slots import SlotBusy
@@ -14,7 +18,24 @@ from core.slots import SlotBusy
 from .tokens import TokenStore
 
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+PAGES = {"/": "index.html", "/index.html": "index.html", "/admin": "admin.html", "/admin.html": "admin.html"}
 MAX_BODY = 64 * 1024
+
+
+def dashboard(agent: Agent) -> dict[str, Any]:
+    """host_status と network（どちらも R0）を実行して並べる。取れない項目はツールの戻り値のまま返す。"""
+    out: dict[str, Any] = {}
+    for name in ("host_status", "network"):
+        spec = agent.registry.get(name)
+        if spec is None:
+            out[name] = {"error": "ツールが登録されていません"}
+            continue
+        try:
+            out[name] = spec.handler({})
+        except Exception as e:  # 1つの失敗で画面全体を壊さない
+            out[name] = {"error": f"{type(e).__name__}: {e}"}
+    out["runs_running"] = sum(1 for r in agent.tracker.list() if r["status"] == "running")
+    return out
 
 
 def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> ThreadingHTTPServer:
@@ -27,10 +48,11 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> Threa
             pass
 
         def _json(self, code: int, obj: Any) -> None:
-            body = json.dumps(obj, ensure_ascii=False).encode()
+            body = json.dumps(obj, ensure_ascii=False, default=str).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
@@ -38,26 +60,65 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> Threa
             h = self.headers.get("Authorization", "")
             device = tokens.verify(h[7:] if h.lower().startswith("bearer ") else None)
             if device is None:
-                agent.audit.write("auth_failed", "-", path=self.path, client=self.client_address[0])
+                agent.audit.write("auth_failed", "-", path=urlsplit(self.path).path, client=self.client_address[0])
                 self._json(401, {"error": "unauthorized"})
             return device
 
         def do_GET(self) -> None:
-            if self.path in ("/", "/index.html"):
-                body = (UI_DIR / "index.html").read_bytes()
+            url = urlsplit(self.path)
+            path, qs = url.path, {k: v[0] for k, v in parse_qs(url.query).items()}
+            if path in PAGES:
+                body = (UI_DIR / PAGES[path]).read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
-            elif self.path == "/api/health":
-                if self._auth():
-                    self._json(200, {"status": "ok", "tools": agent.registry.names()})
+                return
+            if not path.startswith("/api/"):
+                return self._json(404, {"error": "not found"})
+            if not self._auth():
+                return
+            if path == "/api/health":
+                self._json(200, {"status": "ok", "tools": agent.registry.names()})
+            elif path == "/api/runs":
+                self._json(200, {"runs": agent.tracker.list()})
+            elif path.startswith("/api/runs/"):
+                rid = path.split("/")[3]
+                run = agent.tracker.get(rid)
+                events = agent.audit.search(days=7, request_id=rid, limit=500)[::-1]
+                if run is None and not events:
+                    return self._json(404, {"error": "not found"})
+                self._json(200, {"run": run, "audit": events})
+            elif path == "/api/audit":
+                try:
+                    limit = min(int(qs.get("limit", "100")), 500)
+                    days = min(int(qs.get("days", "3")), 90)
+                except ValueError:
+                    return self._json(400, {"error": "limit/days は整数で指定してください"})
+                self._json(200, {"events": agent.audit.search(days, qs.get("q", ""), qs.get("event", ""), qs.get("tool", ""),
+                                                              qs.get("request_id", ""), limit)})
+            elif path == "/api/tools":
+                self._json(200, {"tools": [{"name": n, "level": agent.registry.get(n).level.name,
+                                            "description": agent.registry.get(n).description} for n in agent.registry.names()]})
+            elif path == "/api/dashboard":
+                self._json(200, dashboard(agent))
+            elif path == "/api/devices":
+                self._json(200, {"devices": tokens.devices()})
             else:
                 self._json(404, {"error": "not found"})
 
         def do_POST(self) -> None:
-            if self.path != "/api/chat":
+            path = urlsplit(self.path).path
+            if path.startswith("/api/runs/") and path.endswith("/cancel"):
+                device = self._auth()
+                if not device:
+                    return
+                rid = path.split("/")[3]
+                ok = agent.tracker.cancel(rid)
+                agent.audit.write("cancel_requested", rid, device=device, accepted=ok)
+                return self._json(200 if ok else 404, {"cancel_requested": ok})
+            if path != "/api/chat":
                 return self._json(404, {"error": "not found"})
             device = self._auth()
             if not device:
@@ -75,7 +136,7 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> Threa
 
             def work() -> None:
                 try:
-                    r = agent.run(request, on_event=q.put)
+                    r = agent.run(request, on_event=q.put, device=device)
                     q.put({"type": "done", "request_id": r.request_id, "stopped_reason": r.stopped_reason,
                            "tool_calls": r.tool_calls})
                 except SlotBusy as e:

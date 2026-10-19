@@ -68,6 +68,34 @@ class AuditLog:
             return []
         return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x]
 
+    def search(self, days: int = 3, text: str = "", event: str = "", tool: str = "", request_id: str = "",
+               limit: int = 200) -> list[dict[str, Any]]:
+        """直近 days 日（圧縮済みを含む）のイベントを新しい順に絞り込む。text は行全体への部分一致。"""
+        now = datetime.now(JST)
+        needle = text.lower()
+        out: list[dict[str, Any]] = []
+        for d in range(max(1, days)):
+            base = self.path_for(now - timedelta(days=d))
+            gz = base.with_name(base.name + ".gz")
+            if base.exists():
+                lines = base.read_text(encoding="utf-8").splitlines()
+            elif gz.exists():
+                with gzip.open(gz, "rt", encoding="utf-8") as f:
+                    lines = f.read().splitlines()
+            else:
+                continue
+            for line in reversed(lines):
+                if not line or (needle and needle not in line.lower()):
+                    continue
+                rec = json.loads(line)
+                if (event and rec.get("event") != event) or (tool and rec.get("tool") != tool) \
+                        or (request_id and rec.get("request_id") != request_id):
+                    continue
+                out.append(rec)
+                if len(out) >= limit:
+                    return out
+        return out
+
     def compress_old(self) -> list[Path]:
         """今日より前のログを .gz に圧縮する（元の内容は残し、削除は圧縮済みの原本のみ）。"""
         today = self.path_for(datetime.now(JST))
