@@ -9,6 +9,6 @@ if (-not (Test-Path $csc)) { throw "csc.exe not found: $csc" }
 $out = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force $out | Out-Null
 & $csc /nologo /target:winexe /optimize+ /utf8output "/out:$out\Faraway.exe" "/win32icon:$here\faraway.ico" `
-  /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll "$here\Faraway.cs"
+  /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Security.dll /reference:System.Web.Extensions.dll "$here\Faraway.cs"
 if ($LASTEXITCODE -ne 0) { throw "Build failed (exit code $LASTEXITCODE)" }
 Get-Item "$out\Faraway.exe" | Select-Object FullName, Length
