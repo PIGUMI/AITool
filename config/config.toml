@@ -75,6 +75,13 @@ name = "aitool"
 path = "C:\\Users\\user\\Documents\\AITool"
 ref = "HEAD"
 
+[batch]
+# 夜間バッチ（ジョブキュー）。when="night" のジョブは、この時間帯の中だけ実行する（時間帯は仮。確認待ち）。
+# 対話スロットが使用中のあいだは、when="now" のジョブも含めて実行を延期する。
+enabled = true
+window_start = "02:00"
+window_end = "06:00"
+
 [dev]
 # 開発作業（R0〜R2）。専用の clone と worktree の中だけで作業し、常駐PCのメインのチェックアウトには触れない。
 # work_dir を省略すると %USERPROFILE%\.assistant\work

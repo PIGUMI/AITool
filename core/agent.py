@@ -62,9 +62,9 @@ class Agent:
         self.approvals = ApprovalManager(audit, registry, ttl=approval_ttl)
 
     def run(self, request: str, slot: str = "interactive", on_event: EventCallback | None = None,
-            device: str = "-") -> AgentResult:
+            device: str = "-", request_id: str | None = None) -> AgentResult:
         """1件の依頼を処理する。経過は tracker に残り、管理画面から中止できる。"""
-        rid = uuid.uuid4().hex[:12]
+        rid = request_id or uuid.uuid4().hex[:12]
         user_emit = on_event or (lambda e: None)
 
         def emit(ev: dict[str, Any]) -> None:

@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from core.agent import Agent
+from core.jobs import JobQueue
 from core.slots import SlotBusy
 
 from .tokens import TokenStore
@@ -39,7 +40,7 @@ def dashboard(agent: Agent) -> dict[str, Any]:
     return out
 
 
-def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> ThreadingHTTPServer:
+def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: JobQueue | None = None) -> ThreadingHTTPServer:
     """トークンが1つも無いサーバーは作らない（認証は必須）。"""
     if not tokens.devices():
         raise RuntimeError("APIトークンが未発行です。python -m api.tokens add <端末名> で発行してください")
@@ -106,6 +107,8 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> Threa
                 self._json(200, dashboard(agent))
             elif path == "/api/devices":
                 self._json(200, {"devices": tokens.devices()})
+            elif path == "/api/jobs":
+                self._json(200, {"jobs": jobs.list() if jobs else [], "window": [str(jobs.window[0])[:5], str(jobs.window[1])[:5]] if jobs else None})
             elif path == "/api/approvals":
                 self._json(200, {"approvals": agent.approvals.list(), "ttl_seconds": agent.approvals.ttl})
             else:
@@ -121,6 +124,24 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int) -> Threa
                 ok = agent.tracker.cancel(rid)
                 agent.audit.write("cancel_requested", rid, device=device, accepted=ok)
                 return self._json(200 if ok else 404, {"cancel_requested": ok})
+            if path == "/api/jobs" or (path.startswith("/api/jobs/") and path.endswith("/cancel")):
+                device = self._auth()
+                if not device:
+                    return
+                if jobs is None:
+                    return self._json(404, {"error": "ジョブキューが有効ではありません"})
+                if path.endswith("/cancel"):
+                    out = jobs.cancel(path.split("/")[3])
+                    return self._json(200 if out.get("ok") else (404 if out.get("error") == "not_found" else 409), out)
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(n)) if 0 < n <= MAX_BODY else {}
+                    request, when = str(body["request"]).strip(), str(body.get("when", "now"))
+                    if not request:
+                        raise ValueError
+                    return self._json(200, jobs.submit(request, when, device))
+                except (ValueError, KeyError, TypeError):
+                    return self._json(400, {"error": "request（と when: now/night）が必要です"})
             if path.startswith("/api/approvals/") and path.rsplit("/", 1)[-1] in ("approve", "reject"):
                 device = self._auth()
                 if not device:
@@ -191,10 +212,16 @@ def main() -> None:
         for h in hosts:
             if h != "127.0.0.1":
                 print(f"  http://{h}:{cfg['api']['port']}/#token={token}")
+    jobs = None
+    batch = cfg.get("batch", {})
+    if batch.get("enabled", True):  # 夜間バッチ（時間帯は仮。config の [batch]）
+        jobs = JobQueue(agent, (batch.get("window_start", "02:00"), batch.get("window_end", "06:00")),
+                        Path(cfg["audit"]["directory"]).parent / "jobs.json")
+        jobs.start()
     servers = []
     for h in hosts:  # LAN と Tailscale など、待ち受けるアドレスごとに1つ起動する
         try:
-            servers.append(make_server(agent, store, h, cfg["api"]["port"]))
+            servers.append(make_server(agent, store, h, cfg["api"]["port"], jobs))
             print(f"listening on {h}:{cfg['api']['port']}")
         except OSError as e:  # 例: Tailscale が停止中でアドレスが無い。他のアドレスは続ける
             print(f"skip {h}: {e.strerror or type(e).__name__}")

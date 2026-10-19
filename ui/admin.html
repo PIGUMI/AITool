@@ -60,7 +60,7 @@ async function post(path, body) {
 const fmt = t => t ? new Date(t * 1000).toLocaleString('ja-JP') : '-';
 const dur = r => r.finished_at ? ((r.finished_at - r.started_at).toFixed(1) + '秒') : '実行中';
 
-const tabs = { runs: '作業', approvals: '承認', audit: '監査ログ', dashboard: 'ダッシュボード', tools: 'ツール', devices: '端末' };
+const tabs = { runs: '作業', jobs: 'ジョブ', approvals: '承認', audit: '監査ログ', dashboard: 'ダッシュボード', tools: 'ツール', devices: '端末' };
 // 承認待ちの件数をタブに出す（どのタブにいても気づけるように）
 async function badge_() { try { const { approvals } = await api('/api/approvals'); const n = approvals.filter(a => a.status === 'pending').length;
   for (const b of $('tabs').children) if (b.dataset.k === 'approvals') b.textContent = n ? `承認 (${n})` : '承認'; } catch {} }
@@ -100,6 +100,26 @@ const views = {
       v.replaceChildren(box);
     };
     await draw(); timer = setInterval(() => draw().catch(() => {}), 3000);
+  },
+
+  async jobs(v) {
+    const form = el('div', 'card'), ta = el('textarea'), row = el('div', 'row'), when = el('select'), go = el('button', '', 'ジョブを追加'), out = el('div');
+    ta.rows = 3; ta.style.cssText = 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit';
+    ta.placeholder = '預ける依頼（例：aitool のテストを実行して結果をまとめて）';
+    const draw = async () => {
+      const { jobs, window } = await api('/api/jobs');
+      when.replaceChildren(new Option('今すぐ（対話中は延期）', 'now'), new Option(`夜間のみ（${window ? window.join('〜') : '-'}）`, 'night'));
+      out.replaceChildren(el('p', 'mute', `${jobs.length} 件（5秒ごとに更新）。バッチ用スロットで1件ずつ実行します。影響のある操作（R2）は承認待ちで止まります。`));
+      for (const j of jobs) {
+        const c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(j.status), el('strong', 'grow', j.request), el('span', 'mute', `${j.when} · ${j.device}`));
+        if (['queued', 'running'].includes(j.status)) { const b = el('button', 'danger', j.status === 'queued' ? '取り消し' : '中止'); b.onclick = async () => { try { await post(`/api/jobs/${j.id}/cancel`); } catch (e) { alert(e.message); } draw(); }; top.appendChild(b); }
+        c.append(top, el('div', 'mute', `${fmt(j.created_at)} · ID ${j.id}`)); if (j.result) c.appendChild(el('pre', '', j.result)); out.appendChild(c);
+      }
+    };
+    go.onclick = async () => { if (!ta.value.trim()) return; try { await post('/api/jobs', { request: ta.value, when: when.value }); ta.value = ''; } catch (e) { alert('追加できませんでした: ' + e.message); } draw(); };
+    row.append(when, go); form.append(ta, row); v.replaceChildren(form, out);
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 5000);
   },
 
   async approvals(v) {
