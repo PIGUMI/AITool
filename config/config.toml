@@ -34,6 +34,10 @@ pattern = "このPC|この端末|スマホの|端末の|PCの(ファイル|フ�
 tools = ["device_info", "device_list", "device_read"]
 
 [[agent.force_tools]]
+pattern = "アップデート|自己更新|最新版|Faraway.{0,6}更新|バージョン"
+tools = ["update_check"]
+
+[[agent.force_tools]]
 pattern = "今日|今何時|現在時刻|何曜日|日付|今の時間"
 tools = ["current_time"]
 
@@ -83,6 +87,18 @@ history_commits = 300         # 索引するコミットメッセージの件数
 name = "faraway"
 path = "C:\\Users\\user\\Documents\\AITool"
 ref = "HEAD"
+
+[update]
+# 自己更新（docs/self-update.md）。更新元は設定で固定し、モデルは変更できない。反映されるのは main にマージ済みのコードだけ。
+# スーパーバイザー（python supervisor.py）経由で起動したときだけ、適用（再起動）できる。直接起動したサーバーは確認・準備まで。
+remote_url = "https://github.com/PIGUMI/AITool.git"   # リポジトリ名変更後は .../Faraway.git でも可（旧URLは自動転送される）
+branch = "main"
+auto_check_hours = 6              # 定期的に更新を確認する（確認だけ。適用は承認が必要）。0 で無効
+require_tests = true              # 準備でテストを通す（通らない版は適用しない）
+test_command = ["python", "-m", "pytest", "-q", "-x"]
+test_timeout_seconds = 900
+keep_releases = 3                 # 残す古いリリースの数（現在・直前の版は常に残す）
+build_exe = true                  # Windows では、準備のときに Faraway.exe もビルドする（失敗しても適用は止めない）
 
 [batch]
 # 夜間バッチ（ジョブキュー）。when="night" のジョブは、この時間帯の中だけ実行する（時間帯は仮。確認待ち）。

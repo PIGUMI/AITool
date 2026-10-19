@@ -5,15 +5,16 @@ from pathlib import Path
 from typing import Any
 
 from policy.registry import ToolRegistry
-from tools import audit_search, calendar, clock, dev, device, host_status, network, notify, repo, search, web_fetch, web_render, web_search
+from tools import audit_search, calendar, clock, dev, device, host_status, network, notify, repo, search, update, web_fetch, web_render, web_search
 
 from .agent import Agent
 from .audit import AuditLog
 from .bridge import DeviceBridge
-from .config import load_config
+from .config import data_path, load_config
 from .llm import LLMClient
 from .secrets import read_secret
 from .slots import SlotPool
+from .updater import Updater
 
 
 def llm_extra(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -21,8 +22,12 @@ def llm_extra(cfg: dict[str, Any]) -> dict[str, Any]:
     return dict(cfg["llm"].get("request", {}))
 
 
-def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None, bridge: DeviceBridge | None = None) -> ToolRegistry:
+def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None, bridge: DeviceBridge | None = None,
+                   updater: Updater | None = None) -> ToolRegistry:
     reg = ToolRegistry()
+    if updater is not None:  # 更新元（[update] remote_url）が設定されているときだけ
+        for spec in update.build_tools(updater):
+            reg.register(spec)
     if bridge is not None:  # 端末のファイル操作（アプリ限定。ブラウザ版には無い）
         for spec in device.build_tools(bridge):
             reg.register(spec)
@@ -51,7 +56,7 @@ def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None, bridge: D
 
 def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = None) -> Agent:
     cfg = load_config(config_path)
-    audit = AuditLog(cfg["audit"]["directory"])
+    audit = AuditLog(data_path(cfg["audit"]["directory"]))   # リリースの外（FARAWAY_DATA_DIR）に置く
     if llm is None:
         key = read_secret(cfg["llm"]["api_key_file"])
         audit.add_secret(key)
@@ -59,6 +64,8 @@ def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = N
                         cfg["llm"].get("timeout_seconds", 120), extra=llm_extra(cfg))
     slots = SlotPool(cfg["slots"]["interactive"], cfg["slots"]["batch"])
     bridge = DeviceBridge()
-    return Agent(llm, build_registry(cfg, audit, bridge), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots,
+    ucfg = cfg.get("update", {})
+    updater = Updater(ucfg, audit) if ucfg.get("remote_url") else None
+    return Agent(llm, build_registry(cfg, audit, bridge, updater), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots,
                  force_rules=cfg["agent"].get("force_tools", []), approval_ttl=cfg["agent"].get("approval_ttl_seconds", 600),
-                 bridge=bridge)
+                 bridge=bridge, updater=updater)

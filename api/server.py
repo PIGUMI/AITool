@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 import queue
 import ssl
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from core.agent import Agent
 from core.jobs import JobQueue
 from core.slots import SlotBusy
+from core.updater import UpdateError
 
 from .tokens import TokenStore
 
@@ -117,6 +120,8 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
                 self._json(200, dashboard(agent))
             elif path == "/api/devices":
                 self._json(200, {"devices": tokens.devices(), "bridge": agent.bridge.devices()})
+            elif path == "/api/update/status":
+                self._json(200, agent.updater.status() if agent.updater else {"enabled": False})
             elif path == "/api/bridge/next":
                 # 端末（アプリ）のロングポーリング。自分宛ての操作だけを受け取る。
                 try:
@@ -141,6 +146,34 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
                 ok = agent.tracker.cancel(rid)
                 agent.audit.write("cancel_requested", rid, device=device, accepted=ok)
                 return self._json(200 if ok else 404, {"cancel_requested": ok})
+            if path.startswith("/api/update/") and path.rsplit("/", 1)[-1] in ("check", "prepare", "apply", "rollback"):
+                device = self._auth()
+                if not device:
+                    return
+                up = agent.updater
+                if up is None:
+                    return self._json(404, {"error": "自己更新が有効ではありません（[update] remote_url が未設定）"})
+                action = path.rsplit("/", 1)[-1]
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(n)) if 0 < n <= MAX_BODY else {}
+                    if action == "check":
+                        return self._json(200, up.check())
+                    if action == "prepare":   # 数分かかるので、バックグラウンドで始める
+                        agent.audit.write("update_prepare_requested", "-", device=device)
+                        return self._json(202, up.prepare_async(body.get("sha") or None))
+                    # apply / rollback は R2。画面のボタンも承認要求を作るだけで、実行は承認画面で承認されたときだけ
+                    if action == "apply":
+                        sha = str(body.get("sha", ""))
+                        ap = agent.approvals.request("-", "update_apply", {"sha": sha},
+                                                     f"Faraway を {up.version()[:12]} → {sha[:12]} に更新して再起動します（テスト・自己検査は通過済み。失敗時は自動で元に戻ります）")
+                    else:
+                        ap = agent.approvals.request("-", "update_rollback", {}, "Faraway を直前の版に戻して再起動します")
+                    return self._json(200, {"approval_id": ap["id"], "hash": ap["hash"], "summary": ap["summary"]})
+                except UpdateError as e:
+                    return self._json(409, {"error": str(e)})
+                except (ValueError, TypeError, AttributeError):
+                    return self._json(400, {"error": "不正な本文です"})
             if path in ("/api/bridge/hello", "/api/bridge/result"):
                 device = self._auth()
                 if not device:
@@ -240,9 +273,10 @@ def enable_tls(server: ThreadingHTTPServer, cert_file: str, key_file: str) -> No
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
 
 
-def main() -> None:
+def main() -> int:
+    from core import lifecycle
     from core.app import build_agent
-    from core.config import load_config
+    from core.config import data_path, load_config
     from core.secrets import secrets_dir
 
     cfg = load_config()
@@ -262,7 +296,7 @@ def main() -> None:
     batch = cfg.get("batch", {})
     if batch.get("enabled", True):  # 夜間バッチ（時間帯は仮。config の [batch]）
         jobs = JobQueue(agent, (batch.get("window_start", "02:00"), batch.get("window_end", "06:00")),
-                        Path(cfg["audit"]["directory"]).parent / "jobs.json")
+                        data_path(cfg["audit"]["directory"]).parent / "jobs.json")
         jobs.start()
     servers = []
     for h in hosts:  # LAN と Tailscale など、待ち受けるアドレスごとに1つ起動する
@@ -278,8 +312,39 @@ def main() -> None:
         raise SystemExit("待ち受けできるアドレスがありません")
     for s in servers[1:]:
         threading.Thread(target=s.serve_forever, daemon=True).start()
+
+    exit_code = {"v": 0}
+
+    def on_restart() -> None:
+        """自己更新の適用後: サーバーを止め、終了コード 75 で終了する（スーパーバイザーが新しい版で起動し直す）。"""
+        exit_code["v"] = lifecycle.RESTART_EXIT_CODE
+        agent.audit.write("restarting", "-", reason="update")
+        if jobs is not None:
+            jobs.stop()
+        for s in servers:
+            threading.Thread(target=s.shutdown, daemon=True).start()
+
+    lifecycle.set_restart_handler(on_restart)
+    up = agent.updater
+    hours = float(cfg.get("update", {}).get("auto_check_hours", 6))
+    if up is not None and hours > 0:   # 定期的に更新を確認する（確認だけ。適用は承認が必要）
+        def auto_check() -> None:
+            last = ""
+            time.sleep(60)
+            while True:
+                try:
+                    info = up.check()
+                    if info["state"] == "behind" and info["latest"] != last:
+                        last = info["latest"]
+                        agent.audit.write("update_available", "-", latest=info["latest"][:12], commits=len(info["commits"]))
+                except Exception:
+                    pass
+                time.sleep(hours * 3600)
+
+        threading.Thread(target=auto_check, daemon=True, name="update-auto-check").start()
     servers[0].serve_forever()
+    return exit_code["v"]
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -54,7 +54,7 @@ class Agent:
     def __init__(self, llm: LLMClient, registry: ToolRegistry, audit: AuditLog,
                  max_tool_calls: int = 20, max_llm_turns: int = 25,
                  slots: SlotPool | None = None, force_rules: list[dict[str, Any]] | None = None,
-                 approval_ttl: float = 600.0, bridge: DeviceBridge | None = None) -> None:
+                 approval_ttl: float = 600.0, bridge: DeviceBridge | None = None, updater: Any = None) -> None:
         # force_rules: [{"pattern": 正規表現, "tools": [ツール名...]}]。依頼が一致したら、最初の1回はそのツールの呼び出しを強制する
         self.force_rules = [(re.compile(r["pattern"]), list(r["tools"])) for r in (force_rules or [])]
         self.llm, self.registry, self.audit = llm, registry, audit
@@ -63,6 +63,7 @@ class Agent:
         self.tracker = RunTracker()
         self.approvals = ApprovalManager(audit, registry, ttl=approval_ttl)
         self.bridge = bridge or DeviceBridge()  # アプリが動いている端末との橋渡し（端末のファイル操作）
+        self.updater = updater                  # 自己更新（[update] remote_url が設定されているときだけ）
 
     def run(self, request: str, slot: str = "interactive", on_event: EventCallback | None = None,
             device: str = "-", request_id: str | None = None) -> AgentResult:
