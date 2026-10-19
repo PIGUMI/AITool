@@ -206,4 +206,4 @@ def build_tool(cfg: dict[str, Any], resolver: Callable[[str, int], list[str]] = 
         }
 
     return ToolSpec("web_fetch", "公開Webページを1件取得して本文テキストと出典URLを返す（GETのみ。LAN・ローカルのアドレスは拒否）。",
-                    schema, Level.R0, handler)
+                    schema, Level.R0, handler, egress=True)

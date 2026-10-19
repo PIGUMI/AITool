@@ -12,6 +12,7 @@ from policy.registry import ToolRegistry
 
 from .approvals import ApprovalManager
 from .audit import AuditLog
+from .bridge import DeviceBridge
 from .llm import LLMClient, LLMError
 from .prompts import SYSTEM_PROMPT
 from .runs import RunTracker
@@ -29,6 +30,7 @@ class AgentResult:
     tool_calls: int = 0
     stopped_reason: str = "done"  # done / tool_limit / turn_limit / llm_error
     trace: list[dict[str, Any]] = field(default_factory=list)
+    tainted: bool = False  # 端末のファイルなど私的データを読んだ。以降、外部へ通信するツールは使えない（情報の持ち出し防止）
 
 
 _THINK = re.compile(r"<think>.*?(</think>|$)", re.S)
@@ -52,7 +54,7 @@ class Agent:
     def __init__(self, llm: LLMClient, registry: ToolRegistry, audit: AuditLog,
                  max_tool_calls: int = 20, max_llm_turns: int = 25,
                  slots: SlotPool | None = None, force_rules: list[dict[str, Any]] | None = None,
-                 approval_ttl: float = 600.0) -> None:
+                 approval_ttl: float = 600.0, bridge: DeviceBridge | None = None) -> None:
         # force_rules: [{"pattern": 正規表現, "tools": [ツール名...]}]。依頼が一致したら、最初の1回はそのツールの呼び出しを強制する
         self.force_rules = [(re.compile(r["pattern"]), list(r["tools"])) for r in (force_rules or [])]
         self.llm, self.registry, self.audit = llm, registry, audit
@@ -60,6 +62,7 @@ class Agent:
         self.slots = slots or SlotPool()
         self.tracker = RunTracker()
         self.approvals = ApprovalManager(audit, registry, ttl=approval_ttl)
+        self.bridge = bridge or DeviceBridge()  # アプリが動いている端末との橋渡し（端末のファイル操作）
 
     def run(self, request: str, slot: str = "interactive", on_event: EventCallback | None = None,
             device: str = "-", request_id: str | None = None) -> AgentResult:
@@ -164,8 +167,11 @@ class Agent:
         spec = self.registry.get(name)
 
         def finish(status: str, payload: Any, level: str | None = None, args: Any = None) -> str:
+            # 端末のファイルなど私的データの内容は、監査ログに残さない（引数と状態だけ記録する）
+            summary = "(私的データのため内容は記録しません)" if spec is not None and spec.reads_private and status == "ok" \
+                else json.dumps(payload, ensure_ascii=False, default=str)[:300]
             self.audit.write("tool_call", rid, request=request[:200], tool=name, level=level,
-                             args=args, status=status, result_summary=json.dumps(payload, ensure_ascii=False, default=str)[:300])
+                             args=args, status=status, result_summary=summary)
             res.trace.append({"tool": name, "status": status})
             emit({"type": "tool", "tool": name, "status": status})
             return _wrap(name, payload)
@@ -179,6 +185,11 @@ class Agent:
         errors = validate(args, spec.input_schema)
         if errors:
             return finish("invalid_arguments", {"error": errors}, spec.level.name, args)
+        if spec.egress and res.tainted:
+            # 私的データを読んだ依頼では、外部へ通信するツールを止める。
+            # （Web ページや読んだファイルに仕込まれた指示で、内容が URL・検索語・通知に載って出ていくのを防ぐ）
+            return finish("egress_blocked", {"error": "この依頼では端末のファイルなどの私的データを読んだため、外部へ通信するツールは使えません。"
+                                                     "外部の情報が必要なら、別の依頼として行ってください。"}, spec.level.name, args)
         disp = decide(spec.level)
         if disp is Disposition.DENIED:
             return finish("denied", {"error": "このツールは実行できません"}, spec.level.name, args)
@@ -194,4 +205,7 @@ class Agent:
             out = spec.handler(args)
         except Exception as e:  # ツールの失敗はモデルに返し、ループは続ける
             return finish("error", {"error": f"{type(e).__name__}: {e}"}, spec.level.name, args)
+        if spec.reads_private and not (isinstance(out, dict) and out.get("error")):
+            res.tainted = True
+            self.audit.write("tainted", rid, tool=name)
         return finish("ok", out, spec.level.name, args)

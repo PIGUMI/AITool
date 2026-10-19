@@ -120,4 +120,4 @@ def build_tool(cfg: dict[str, Any], resolver: Callable[..., list[str]] = resolve
             errors.append(f"{provider}: 該当なし")
         return {"error": "search_failed", "reason": "; ".join(errors) or "検索元が設定されていません", "query": query}
 
-    return ToolSpec("web_search", "Webを検索して候補ページ（タイトル・URL・要約）を返す。本文は web_fetch で取得して確認する。", schema, Level.R0, handler)
+    return ToolSpec("web_search", "Webを検索して候補ページ（タイトル・URL・要約）を返す。本文は web_fetch で取得して確認する。", schema, Level.R0, handler, egress=True)

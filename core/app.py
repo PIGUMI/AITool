@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from policy.registry import ToolRegistry
-from tools import audit_search, calendar, clock, dev, host_status, network, notify, repo, search, web_fetch, web_render, web_search
+from tools import audit_search, calendar, clock, dev, device, host_status, network, notify, repo, search, web_fetch, web_render, web_search
 
 from .agent import Agent
 from .audit import AuditLog
+from .bridge import DeviceBridge
 from .config import load_config
 from .llm import LLMClient
 from .secrets import read_secret
@@ -20,8 +21,11 @@ def llm_extra(cfg: dict[str, Any]) -> dict[str, Any]:
     return dict(cfg["llm"].get("request", {}))
 
 
-def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None) -> ToolRegistry:
+def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None, bridge: DeviceBridge | None = None) -> ToolRegistry:
     reg = ToolRegistry()
+    if bridge is not None:  # 端末のファイル操作（アプリ限定。ブラウザ版には無い）
+        for spec in device.build_tools(bridge):
+            reg.register(spec)
     reg.register(clock.build_tool())
     reg.register(repo.build_read_tool(cfg.get("search", {})))
     reg.register(repo.build_git_tool(cfg.get("search", {})))
@@ -54,5 +58,7 @@ def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = N
         llm = LLMClient(cfg["llm"]["endpoints"], key, cfg["llm"].get("model", "qwen3.5-9b"),
                         cfg["llm"].get("timeout_seconds", 120), extra=llm_extra(cfg))
     slots = SlotPool(cfg["slots"]["interactive"], cfg["slots"]["batch"])
-    return Agent(llm, build_registry(cfg, audit), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots,
-                 force_rules=cfg["agent"].get("force_tools", []), approval_ttl=cfg["agent"].get("approval_ttl_seconds", 600))
+    bridge = DeviceBridge()
+    return Agent(llm, build_registry(cfg, audit, bridge), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots,
+                 force_rules=cfg["agent"].get("force_tools", []), approval_ttl=cfg["agent"].get("approval_ttl_seconds", 600),
+                 bridge=bridge)

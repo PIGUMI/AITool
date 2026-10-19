@@ -66,4 +66,4 @@ def build_tool(cfg: dict[str, Any], sender: Sender = _send, private_check: Calla
             return {"sent": False, "error": "send_failed", "reason": type(e).__name__}
         return {"sent": 200 <= status < 300, "http_status": status}
 
-    return ToolSpec("notify", "スマートフォン等へ ntfy で通知を送る（短い本文のみ。秘匿情報は送れない）。ユーザーが頼んだときだけ使う。", schema, Level.R1, handler)
+    return ToolSpec("notify", "スマートフォン等へ ntfy で通知を送る（短い本文のみ。秘匿情報は送れない）。ユーザーが頼んだときだけ使う。", schema, Level.R1, handler, egress=True)

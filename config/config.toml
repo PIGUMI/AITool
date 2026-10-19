@@ -30,6 +30,10 @@ pattern = "リポジトリ|実装|ソース|コード|関数|クラス|コミッ
 tools = ["search", "repo_read", "git_info"]
 
 [[agent.force_tools]]
+pattern = "このPC|この端末|スマホの|端末の|PCの(ファイル|フォルダ)|ドキュメント|デスクトップ|ダウンロードフォルダ|フォルダの中"
+tools = ["device_info", "device_list", "device_read"]
+
+[[agent.force_tools]]
 pattern = "今日|今何時|現在時刻|何曜日|日付|今の時間"
 tools = ["current_time"]
 

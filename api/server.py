@@ -88,7 +88,8 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
                 return
             if not path.startswith("/api/"):
                 return self._json(404, {"error": "not found"})
-            if not self._auth():
+            self._device = self._auth()
+            if not self._device:
                 return
             if path == "/api/health":
                 self._json(200, {"status": "ok", "tools": agent.registry.names()})
@@ -115,7 +116,14 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
             elif path == "/api/dashboard":
                 self._json(200, dashboard(agent))
             elif path == "/api/devices":
-                self._json(200, {"devices": tokens.devices()})
+                self._json(200, {"devices": tokens.devices(), "bridge": agent.bridge.devices()})
+            elif path == "/api/bridge/next":
+                # 端末（アプリ）のロングポーリング。自分宛ての操作だけを受け取る。
+                try:
+                    wait = max(0.0, min(float(qs.get("wait", "25")), 30.0))
+                except ValueError:
+                    wait = 25.0
+                self._json(200, {"request": agent.bridge.next_request(self._device, wait)})
             elif path == "/api/jobs":
                 self._json(200, {"jobs": jobs.list() if jobs else [], "window": [str(jobs.window[0])[:5], str(jobs.window[1])[:5]] if jobs else None})
             elif path == "/api/approvals":
@@ -133,6 +141,24 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
                 ok = agent.tracker.cancel(rid)
                 agent.audit.write("cancel_requested", rid, device=device, accepted=ok)
                 return self._json(200 if ok else 404, {"cancel_requested": ok})
+            if path in ("/api/bridge/hello", "/api/bridge/result"):
+                device = self._auth()
+                if not device:
+                    return
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                    if n > 700_000:
+                        return self._json(413, {"error": "too large"})
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    if path.endswith("hello"):
+                        agent.bridge.hello(device, body)
+                        agent.audit.write("device_hello", "-", device=device, roots=[r.get("name") for r in body.get("roots", [])],
+                                          platform=str(body.get("platform", ""))[:20])
+                        return self._json(200, {"ok": True})
+                    ok = agent.bridge.submit_result(device, str(body["id"]), bool(body.get("ok")), body.get("data") if body.get("ok") else body.get("error"))
+                    return self._json(200 if ok else 404, {"ok": ok})
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    return self._json(400, {"error": "不正な本文です"})
             if path == "/api/jobs" or (path.startswith("/api/jobs/") and path.endswith("/cancel")):
                 device = self._auth()
                 if not device:

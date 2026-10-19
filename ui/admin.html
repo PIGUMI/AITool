@@ -191,8 +191,20 @@ const views = {
   },
 
   async devices(v) {
-    const { devices } = await api('/api/devices');
-    v.replaceChildren(el('p', 'mute', 'トークンを発行済みの端末（失効はサーバーで python -m api.tokens revoke <端末名>）'), ...devices.map(d => el('div', 'card', d)));
+    const draw = async () => {
+      const { devices, bridge } = await api('/api/devices');
+      const box = el('div');
+      box.appendChild(el('p', 'mute', 'トークンを発行済みの端末（失効はサーバーで python -m api.tokens revoke <端末名>）。アプリ（EXE/APK）が接続していると、許可フォルダが表示されます（10秒ごとに更新）。'));
+      for (const d of devices) {
+        const b = bridge[d], c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(b ? (b.online ? 'ok' : 'cancelled') : 'done'), el('strong', 'grow', d), el('span', 'mute', b ? `${b.online ? 'オンライン' : 'オフライン'} · ${b.platform || '-'} · v${b.version || '-'}` : 'ブラウザのみ（ファイルアクセスなし）'));
+        c.appendChild(top);
+        if (b) c.appendChild(el('div', 'mute', b.roots.length ? '許可フォルダ: ' + b.roots.map(r => `${r.name}（${r.mode === 'readwrite' ? '読み書き' : '読み取りのみ'}）`).join('、') : '許可フォルダはまだありません（アプリで追加してください）'));
+        box.appendChild(c);
+      }
+      v.replaceChildren(box);
+    };
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 10000);
   },
 };
 show('runs');
