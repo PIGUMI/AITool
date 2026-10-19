@@ -4,8 +4,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import queue
+import re
 import ssl
 import sys
 import threading
@@ -32,6 +34,20 @@ STATIC = {
     "/icon-192.png": ("icon-192.png", "image/png"), "/icon-512.png": ("icon-512.png", "image/png"),
 }
 MAX_BODY = 64 * 1024
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WINDOWS_EXE = REPO_ROOT / "dist" / "Faraway.exe"          # 準備（検証）のときにビルドされる。開発中のチェックアウトでは build.ps1 の出力
+WINDOWS_SRC = REPO_ROOT / "apps" / "windows" / "Faraway.cs"
+
+
+def windows_client_info() -> dict[str, Any]:
+    """配布する Faraway.exe の版（ソースの Version 定数）・SHA-256・サイズ。無ければ available=False。"""
+    m = re.search(r'const string Version = "([0-9.]+)"', WINDOWS_SRC.read_text(encoding="utf-8")) if WINDOWS_SRC.is_file() else None
+    if not (WINDOWS_EXE.is_file() and m):
+        return {"available": False}
+    data = WINDOWS_EXE.read_bytes()
+    return {"available": True, "version": m.group(1), "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 
 
 def dashboard(agent: Agent) -> dict[str, Any]:
@@ -120,6 +136,21 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
                 self._json(200, dashboard(agent))
             elif path == "/api/devices":
                 self._json(200, {"devices": tokens.devices(), "bridge": agent.bridge.devices()})
+            elif path in ("/api/client/windows", "/api/client/windows/download"):
+                # アプリ（Faraway.exe）の自己更新用。サーバーが持つ最新の Faraway.exe の情報と本体（認証必須）。
+                info = windows_client_info()
+                if path.endswith("download"):
+                    if not info["available"]:
+                        return self._json(404, {"error": "Faraway.exe が用意されていません"})
+                    data = WINDOWS_EXE.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self._json(200, info)
             elif path == "/api/update/status":
                 self._json(200, agent.updater.status() if agent.updater else {"enabled": False})
             elif path == "/api/bridge/next":

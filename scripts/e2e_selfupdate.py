@@ -126,7 +126,6 @@ try:
     up = wait(lambda: api("/api/update/status")[0] == 200, timeout=60)
     st = api("/api/update/status")[1] if up else {}
     check("server started under the supervisor", up and st.get("supervised") is True and st.get("version") == v1 and st.get("current_release") == v1[:12], st)
-    check("unauthenticated update API is refused", urllib.request.urlopen(urllib.request.Request(BASE + "/api/health")) if False else True)
     try:
         urllib.request.urlopen(BASE + "/api/update/status", timeout=5)
         check("update status requires a token", False)

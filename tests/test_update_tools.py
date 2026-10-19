@@ -223,3 +223,34 @@ def test_update_error_becomes_409(srv):
     with pytest.raises(urllib.error.HTTPError) as e:
         call(base + "/api/update/check", token, {})
     assert e.value.code == 409
+
+
+# --- アプリ（Faraway.exe）配布のエンドポイント ---
+def test_windows_client_info_and_download(srv, tmp_path, monkeypatch):
+    import hashlib
+    import api.server as server
+    base, token, ag, up = srv
+    exe = tmp_path / "Faraway.exe"
+    exe.write_bytes(b"MZ" + b"\x00" * 100)
+    src = tmp_path / "Faraway.cs"
+    src.write_text('static class Cfg { public const string Version = "1.2.3"; }', encoding="utf-8")
+    monkeypatch.setattr(server, "WINDOWS_EXE", exe)
+    monkeypatch.setattr(server, "WINDOWS_SRC", src)
+    info = call(base + "/api/client/windows", token)[1]
+    assert info == {"available": True, "version": "1.2.3", "sha256": hashlib.sha256(exe.read_bytes()).hexdigest(), "size": 102}
+    r = urllib.request.urlopen(urllib.request.Request(base + "/api/client/windows/download", headers={"Authorization": f"Bearer {token}"}), timeout=10)
+    assert r.read() == exe.read_bytes() and r.headers["Content-Type"] == "application/octet-stream"
+
+
+def test_windows_client_requires_token_and_reports_unavailable(srv, tmp_path, monkeypatch):
+    import api.server as server
+    base, token, ag, up = srv
+    for p in ("/api/client/windows", "/api/client/windows/download"):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            call(base + p, "bad")
+        assert e.value.code == 401
+    monkeypatch.setattr(server, "WINDOWS_EXE", tmp_path / "missing.exe")
+    assert call(base + "/api/client/windows", token)[1] == {"available": False}
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(base + "/api/client/windows/download", token)
+    assert e.value.code == 404

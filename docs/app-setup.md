@@ -48,6 +48,9 @@ powershell -File apps\windows\build.ps1        # → dist\Faraway.exe
 - **記録**: サーバーの監査ログには「どのフォルダのどのパスを読んだか」だけを残し、**内容は残さない**。この PC にも `%APPDATA%\Faraway\access.log` に、いつ・何を・結果を記録する（内容は記録しない。トレイの設定画面の「操作の記録」から開ける）。
 - ログイン情報（APIトークン）は、Windows のユーザーごとの暗号化（DPAPI）で保存する。
 
+### アプリ自身の更新
+サーバーが配布する最新の `Faraway.exe` に、アプリが自分で更新できる（トレイのメニューに「Faraway.exe を更新」が出る。選ぶと SHA-256 を照合して入れ替え、古い版は `Faraway.exe.bak` に残る）。勝手には入れ替えない。詳しくは `docs/self-update.md`。`Faraway.exe --self-update` でも実行できる。
+
 ### 検証
 `python apps\windows\e2e_bridge.py`（`build.ps1` のあと）で、本物のサーバーと本物の `Faraway.exe` を繋ぎ、正常な操作と、フォルダ外・リンク・秘匿ファイル・実行ファイルの書き込みなどの悪意のある操作の 44 項目を確認できる（44/44 通過）。
 

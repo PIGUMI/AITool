@@ -16,6 +16,8 @@
 //          Faraway.exe --check <URL>   接続確認のみ（終了コード 0 = 到達できる）
 //          Faraway.exe --add-root <名前> <フォルダ> [rw]   許可フォルダを追加（rw で読み書き）
 //          Faraway.exe --headless      トレイも画面も出さず、ブリッジだけを動かす（検証・サービス用）
+//          Faraway.exe --self-update [--yes] [--restart]   アプリ自身の更新（サーバーが配布する最新版を、SHA-256 を照合して入れ替える）
+//          Faraway.exe --pair <URL>    接続先とログイン情報だけを保存する（画面なし）
 //          Faraway.exe <URL>           接続先を指定して起動（ペアリング URL …/#token=… も可）
 //
 // ビルド: apps\windows\build.ps1（Windows 標準の C# コンパイラ csc.exe を使う。追加のインストールは不要）
@@ -49,7 +51,7 @@ class Root
 
 static class Cfg
 {
-    public const string Version = "0.2.0";
+    public const string Version = "0.3.0";
     public static readonly string Dir = Environment.GetEnvironmentVariable("FARAWAY_HOME") ??
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Faraway");
     public static readonly string UrlFile = Path.Combine(Dir, "url.txt");
@@ -344,6 +346,120 @@ static class FileOps
     }
 }
 
+// ---- アプリ自身の更新（自己アップデート）----
+// サーバー（Faraway）が配布する最新の Faraway.exe を、確認 → ダウンロード → SHA-256 の照合 → 入れ替え、の順で更新する。
+// 勝手には入れ替えない（トレイのメニューで利用者が選んだとき、または --self-update のとき）。古い版は Faraway.exe.bak に残す。
+class ClientUpdateInfo
+{
+    public string Version;
+    public string Sha256;
+    public long Size;
+}
+
+static class ClientUpdate
+{
+    const long MaxSize = 8 * 1024 * 1024;
+
+    static HttpWebRequest Req(string url, string token, int timeoutMs)
+    {
+        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+        req.Timeout = timeoutMs;
+        req.ReadWriteTimeout = timeoutMs;
+        req.Proxy = null;
+        req.Headers["Authorization"] = "Bearer " + token;
+        return req;
+    }
+
+    // 新しい版があれば情報を返す。無ければ（または確認できなければ）null。
+    public static ClientUpdateInfo Check()
+    {
+        string baseUrl = Cfg.ReadUrl();
+        string token = Cfg.LoadToken();
+        if (string.IsNullOrEmpty(baseUrl) || string.IsNullOrEmpty(token)) return null;
+        ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;
+        string text;
+        using (HttpWebResponse r = (HttpWebResponse)Req(baseUrl + "api/client/windows", token, 10000).GetResponse())
+        using (StreamReader rd = new StreamReader(r.GetResponseStream(), Encoding.UTF8))
+            text = rd.ReadToEnd();
+        Dictionary<string, object> d = new JavaScriptSerializer().DeserializeObject(text) as Dictionary<string, object>;
+        if (d == null || !d.ContainsKey("available") || !(d["available"] is bool) || !(bool)d["available"]) return null;
+        ClientUpdateInfo info = new ClientUpdateInfo();
+        info.Version = Convert.ToString(d["version"]);
+        info.Sha256 = Convert.ToString(d["sha256"]).ToLowerInvariant();
+        info.Size = Convert.ToInt64(d["size"]);
+        try { if (new Version(info.Version) <= new Version(Cfg.Version)) return null; }
+        catch (Exception) { return null; }
+        return info;
+    }
+
+    // ダウンロードして検証する（サイズ・実行ファイルの先頭 "MZ"・SHA-256）。保存先のパスを返す。
+    public static string Download(ClientUpdateInfo info)
+    {
+        if (info.Size <= 0 || info.Size > MaxSize) throw new OpError("配布されたファイルのサイズが不正です");
+        string baseUrl = Cfg.ReadUrl();
+        string token = Cfg.LoadToken();
+        byte[] data;
+        using (HttpWebResponse r = (HttpWebResponse)Req(baseUrl + "api/client/windows/download", token, 60000).GetResponse())
+        using (Stream s = r.GetResponseStream())
+        using (MemoryStream ms = new MemoryStream())
+        {
+            byte[] buf = new byte[16384];
+            int k;
+            while ((k = s.Read(buf, 0, buf.Length)) > 0)
+            {
+                ms.Write(buf, 0, k);
+                if (ms.Length > MaxSize) throw new OpError("ダウンロードが大きすぎます");
+            }
+            data = ms.ToArray();
+        }
+        if (data.Length != info.Size) throw new OpError("ダウンロードしたサイズが一致しません");
+        if (data.Length < 2 || data[0] != (byte)'M' || data[1] != (byte)'Z') throw new OpError("実行ファイルではありません");
+        string hex;
+        using (SHA256 sha = SHA256.Create())
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (byte b in sha.ComputeHash(data)) sb.Append(b.ToString("x2"));
+            hex = sb.ToString();
+        }
+        if (hex != info.Sha256) throw new OpError("SHA-256 が一致しません。更新を中止しました");
+        string dir = Path.Combine(Cfg.Dir, "update");
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "Faraway-" + info.Version + ".exe");
+        File.WriteAllBytes(path, data);
+        return path;
+    }
+
+    // 入れ替え。実行中の exe は上書きできないので、終了を待ってから入れ替える小さなバッチを起動する。
+    // 古い版は <exe>.bak に残す。restart=true なら、入れ替え後にトレイ常駐で起動し直す。
+    public static void Apply(string newExe, bool restart)
+    {
+        string target = Application.ExecutablePath;
+        string batch = Path.Combine(Path.GetDirectoryName(newExe), "apply-update.cmd");
+        StringBuilder b = new StringBuilder();
+        b.AppendLine("@echo off");
+        b.AppendLine("setlocal");
+        b.AppendLine("set \"TARGET=" + target.Replace("%", "%%") + "\"");
+        b.AppendLine("set \"NEW=" + newExe.Replace("%", "%%") + "\"");
+        b.AppendLine("set /a n=0");
+        b.AppendLine(":retry");
+        b.AppendLine("copy /Y \"%TARGET%\" \"%TARGET%.bak\" >nul 2>&1");
+        b.AppendLine("move /Y \"%NEW%\" \"%TARGET%\" >nul 2>&1");
+        b.AppendLine("if errorlevel 1 (");
+        b.AppendLine("  set /a n+=1");
+        b.AppendLine("  if %n% GEQ 60 exit /b 1");
+        b.AppendLine("  ping -n 2 127.0.0.1 >nul");
+        b.AppendLine("  goto retry");
+        b.AppendLine(")");
+        if (restart) b.AppendLine("start \"\" \"%TARGET%\" --no-window");
+        b.AppendLine("exit /b 0");
+        File.WriteAllText(batch, b.ToString(), Encoding.Default);
+        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c \"\"" + batch + "\"\"");
+        psi.CreateNoWindow = true;
+        psi.UseShellExecute = false;
+        Process.Start(psi);
+    }
+}
+
 // ---- サーバーとのブリッジ（ロングポーリング）----
 class Bridge
 {
@@ -563,6 +679,8 @@ class TrayApp : ApplicationContext
     readonly NotifyIcon icon = new NotifyIcon();
     readonly Bridge bridge;
     readonly ToolStripMenuItem statusItem = new ToolStripMenuItem("状態: 起動中");
+    readonly ToolStripMenuItem updateItem = new ToolStripMenuItem("Faraway.exe を更新…");
+    System.Threading.Timer updateTimer;
     readonly ToolStripMenuItem autoStart = new ToolStripMenuItem("Windows 起動時に自動で起動");
     readonly SynchronizationContext ui;
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -580,6 +698,10 @@ class TrayApp : ApplicationContext
         ToolStripMenuItem roots = new ToolStripMenuItem("ファイルアクセスの設定（許可フォルダ）…");
         ToolStripMenuItem pair = new ToolStripMenuItem("ペアリング（ログイン情報の設定）…");
         ToolStripMenuItem quit = new ToolStripMenuItem("終了");
+        ToolStripMenuItem about = new ToolStripMenuItem("バージョン " + Cfg.Version + "（更新を確認…）");
+        updateItem.Visible = false;
+        updateItem.Click += delegate { if (Program.RunSelfUpdate(false, true) == 0) { bridge.Stop(); icon.Visible = false; Application.Exit(); } };
+        about.Click += delegate { if (Program.RunSelfUpdate(false, true) == 0) { bridge.Stop(); icon.Visible = false; Application.Exit(); } };
         open.Click += delegate { Program.OpenWindow(false); };
         admin.Click += delegate { Program.OpenWindow(true); };
         roots.Click += delegate { using (RootsForm f = new RootsForm(Cfg.LoadRoots(), delegate { bridge.RootsChanged(); })) f.ShowDialog(); };
@@ -587,7 +709,18 @@ class TrayApp : ApplicationContext
         autoStart.Checked = IsAutoStart();
         autoStart.Click += delegate { SetAutoStart(!autoStart.Checked); autoStart.Checked = IsAutoStart(); };
         quit.Click += delegate { bridge.Stop(); icon.Visible = false; Application.Exit(); };
-        menu.Items.AddRange(new ToolStripItem[] { statusItem, new ToolStripSeparator(), open, admin, new ToolStripSeparator(), roots, pair, autoStart, new ToolStripSeparator(), quit });
+        menu.Items.AddRange(new ToolStripItem[] { statusItem, updateItem, new ToolStripSeparator(), open, admin, new ToolStripSeparator(), roots, pair, autoStart, about, new ToolStripSeparator(), quit });
+        // 起動の少し後と、6時間ごとに、新しい版が無いか確認する（確認だけ。入れ替えは利用者がメニューから選んだとき）
+        updateTimer = new System.Threading.Timer(delegate
+        {
+            try
+            {
+                ClientUpdateInfo info = ClientUpdate.Check();
+                if (info != null && !updateItem.Visible)
+                    ui.Post(delegate { updateItem.Text = "Faraway.exe を更新（" + info.Version + "）…"; updateItem.Visible = true; icon.ShowBalloonTip(5000, "Faraway", "新しい版（" + info.Version + "）があります。トレイのメニューから更新できます。", ToolTipIcon.Info); }, null);
+            }
+            catch (Exception) { }
+        }, null, 45000, 6 * 3600 * 1000);
         icon.ContextMenuStrip = menu;
         icon.DoubleClick += delegate { Program.OpenWindow(false); };
         icon.Visible = true;
@@ -621,11 +754,16 @@ static class Program
     {
         Application.EnableVisualStyles();
         bool admin = false, reset = false, check = false, headless = false, noWindow = false, addRoot = false;
+        bool selfUpdate = false, yes = false, restartAfter = false, pairOnly = false;
         string given = null;
         List<string> rest = new List<string>();
         foreach (string a in args)
         {
-            if (a == "--admin") admin = true;
+            if (a == "--self-update") selfUpdate = true;
+            else if (a == "--yes") yes = true;
+            else if (a == "--restart") restartAfter = true;
+            else if (a == "--pair") pairOnly = true;
+            else if (a == "--admin") admin = true;
             else if (a == "--reset") reset = true;
             else if (a == "--check") check = true;
             else if (a == "--headless") headless = true;
@@ -639,6 +777,21 @@ static class Program
             string f;
             return given != null && Reachable(Cfg.Normalize(given, out f)) ? 0 : 1;
         }
+
+        if (pairOnly)   // --pair <URL#token=…>: 接続先とログイン情報だけを保存する（画面なし）
+        {
+            if (given == null) return 2;
+            string pf;
+            string pb = Cfg.Normalize(given, out pf);
+            string ptok = Cfg.TokenFromFragment(pf);
+            if (ptok == null) return 3;
+            Cfg.SaveToken(ptok);
+            Cfg.SaveUrl(pb);
+            return 0;
+        }
+
+        if (selfUpdate)   // --self-update [--yes] [--restart]: アプリ自身の更新（終了コード 0=更新を開始 / 10=最新 / 11=失敗 / 12=中止）
+            return RunSelfUpdate(yes, restartAfter || !yes);
 
         if (addRoot)   // --add-root <名前> <フォルダ> [rw]
         {
@@ -718,6 +871,30 @@ static class Program
             GC.KeepAlive(m);
         }
         return 0;
+    }
+
+    // アプリ自身の更新。yes=true は確認なし（検証用・自動化用）。戻り値は終了コード（0 のとき、呼び出し側は終了すること）。
+    public static int RunSelfUpdate(bool yes, bool restart)
+    {
+        ClientUpdateInfo info;
+        try { info = ClientUpdate.Check(); }
+        catch (Exception) { if (!yes) MessageBox.Show("更新を確認できませんでした（サーバーに接続できません）。", Title, MessageBoxButtons.OK, MessageBoxIcon.Warning); return 11; }
+        if (info == null)
+        {
+            if (!yes) MessageBox.Show("Faraway.exe は最新です（" + Cfg.Version + "）。", Title);
+            return 10;
+        }
+        if (!yes && MessageBox.Show("Faraway.exe の新しい版があります。\r\n\r\n現在: " + Cfg.Version + "\r\n新しい版: " + info.Version + "（" + info.Size / 1024 + " KB）\r\n配布元: " + Cfg.ReadUrl()
+            + "\r\n\r\nダウンロードして入れ替え、再起動しますか？（古い版は Faraway.exe.bak に残ります）", Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return 12;
+        try
+        {
+            string path = ClientUpdate.Download(info);
+            ClientUpdate.Apply(path, restart);
+            return 0;
+        }
+        catch (OpError e) { if (!yes) MessageBox.Show(e.Message, Title, MessageBoxButtons.OK, MessageBoxIcon.Warning); return 11; }
+        catch (Exception) { if (!yes) MessageBox.Show("更新に失敗しました。", Title, MessageBoxButtons.OK, MessageBoxIcon.Warning); return 11; }
     }
 
     public static void OpenWindow(bool admin) { OpenWindow(admin, null); }
