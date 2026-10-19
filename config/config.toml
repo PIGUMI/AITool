@@ -74,6 +74,19 @@ name = "aitool"
 path = "C:\\Users\\user\\Documents\\AITool"
 ref = "HEAD"
 
+[calendar]
+# Googleカレンダー（読み取り専用）。認証情報が %USERPROFILE%\.assistant\secrets\ に無ければツールは登録されない。
+# 設定手順は docs/setup-calendar.md。
+calendar_id = "primary"
+work_start = "09:00"          # 空き時間検索の作業時間帯
+work_end = "18:00"
+
+[notify]
+# ntfy への通知（R1）。url と topic が両方あるときだけ有効。通知先は LAN/ローカル/Tailscale のサーバーに限る。
+url = ""                      # 例: "http://192.168.0.13:2586"（サーバー用PCで ntfy を動かす。docs/setup-ntfy.md）
+topic = ""                    # 推測されにくい名前にする（例: "assistant-" + ランダム文字列）
+timeout_seconds = 5
+
 [web_search]
 # 検索元を順に試し、結果が出た最初のものを使う。"searxng"（自前ホスト。推奨）/ "wikipedia"（公式API・キー不要）
 # "duckduckgo" はボット対策で HTTP 202 を返し使えなかったため既定から外している（回避はしない）。
