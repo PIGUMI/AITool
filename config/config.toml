@@ -40,6 +40,17 @@ log_tail_lines = 200
 # 期待する形: {"temperature_c": 55, "utilization_percent": 30, "vram_used_mb": 9000, "vram_total_mb": 16384}
 gpu_command = []
 
+[search]
+# リポジトリ検索（R0）。登録したリポジトリだけを対象に、git の読み取り専用コマンドで索引する（作業ツリーには触れない）。
+# index_path を省略すると %USERPROFILE%\.assistant\index\search.sqlite3
+max_file_bytes = 300000
+history_commits = 300         # 索引するコミットメッセージの件数（最新から）
+
+[[search.repos]]
+name = "aitool"
+path = "C:\\Users\\user\\Documents\\AITool"
+ref = "HEAD"
+
 [web]
 # web_fetch（R0, GETのみ）。LAN・ローカル・Tailscaleのアドレスは設定に関わらず常に拒否する。
 timeout_seconds = 10
