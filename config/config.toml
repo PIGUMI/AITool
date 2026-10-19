@@ -75,6 +75,22 @@ name = "aitool"
 path = "C:\\Users\\user\\Documents\\AITool"
 ref = "HEAD"
 
+[dev]
+# 開発作業（R0〜R2）。専用の clone と worktree の中だけで作業し、常駐PCのメインのチェックアウトには触れない。
+# work_dir を省略すると %USERPROFILE%\.assistant\work
+max_fix_attempts = 5              # ビルド/テストの失敗がこの回数に達したら止まって報告する
+command_timeout_seconds = 600
+min_free_memory_mb = 1500         # 空きメモリがこれを下回るときはビルド/テストを始めない（仮の値。実測で決める）
+git_name = "Assistant"
+git_email = "assistant@localhost"
+
+[[dev.repos]]
+name = "aitool"
+remote_url = "https://github.com/PIGUMI/AITool.git"
+base_ref = "origin/main"          # main への直接 push はしない。PR 経由
+build = []
+test = ["python", "-m", "pytest", "-q"]
+
 [calendar]
 # Googleカレンダー（読み取り専用）。認証情報が %USERPROFILE%\.assistant\secrets\ に無ければツールは登録されない。
 # 設定手順は docs/setup-calendar.md。

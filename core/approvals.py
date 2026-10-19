@@ -107,7 +107,8 @@ class ApprovalManager:
             args = json.loads(json.dumps(it["args"]))
         try:  # 実行はロックの外（長い操作が他の承認を止めない）。状態は executing なので他端末は実行できない
             out = spec.handler(args)
-            status, result = "executed", out
+            # ツールが {"error": ...} を返した（実行できなかった）ときは、成功扱いにしない
+            status, result = ("failed" if isinstance(out, dict) and out.get("error") else "executed"), out
         except Exception as e:
             status, result = "failed", {"error": f"{type(e).__name__}: {e}"}
         summary = json.dumps(result, ensure_ascii=False, default=str)[:300]

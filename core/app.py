@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from policy.registry import ToolRegistry
-from tools import audit_search, calendar, clock, host_status, network, notify, repo, search, web_fetch, web_search
+from tools import audit_search, calendar, clock, dev, host_status, network, notify, repo, search, web_fetch, web_search
 
 from .agent import Agent
 from .audit import AuditLog
@@ -33,6 +33,8 @@ def build_registry(cfg: dict[str, Any], audit: AuditLog | None = None) -> ToolRe
     reg.register(search.build_tool(cfg.get("search", {})))
     reg.register(web_search.build_tool(cfg.get("web_search", {})))
     for spec in calendar.build_tools(cfg.get("calendar", {})):  # Google 認証情報が無ければ登録しない
+        reg.register(spec)
+    for spec in dev.build_tools(cfg.get("dev", {})):  # 登録リポジトリ（remote_url つき）が無ければ登録されない
         reg.register(spec)
     notify_spec = notify.build_tool(cfg.get("notify", {}))  # ntfy の url/topic が未設定なら登録しない
     if notify_spec is not None:
