@@ -59,7 +59,7 @@ def test_read_secret(tmp_path):
 def test_config_has_endpoints_slots_and_no_secret():
     cfg = load_config()
     assert cfg["llm"]["endpoints"] == ["http://192.168.0.13:8080/v1", "http://100.84.113.46:8080/v1"]
-    assert cfg["slots"] == {"interactive": 1, "batch": 1} and cfg["agent"]["max_tool_calls"] == 20
+    assert cfg["slots"] == {"interactive": 1, "batch": 1} and cfg["agent"]["max_tool_calls"] == 40
     text = (Path(__file__).parent.parent / "config" / "config.toml").read_text(encoding="utf-8")
     import re
     assert not re.search(r"[0-9a-f]{32,}", text)  # 長い16進（キー）が設定に無い

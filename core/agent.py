@@ -20,6 +20,8 @@ from .schema import validate
 from .slots import SlotPool
 
 MAX_RESULT_CHARS = 8000
+REPEAT_HINT_AT = 3   # 同じ呼び出しが、この回数続けて失敗したら、ヒントを返す
+REPEAT_STOP_AT = 5   # この回数続けたら、その依頼を止める
 EventCallback = Callable[[dict[str, Any]], None]
 
 
@@ -31,6 +33,8 @@ class AgentResult:
     stopped_reason: str = "done"  # done / tool_limit / turn_limit / llm_error
     trace: list[dict[str, Any]] = field(default_factory=list)
     tainted: bool = False  # 端末のファイルなど私的データを読んだ。以降、外部へ通信するツールは使えない（情報の持ち出し防止）
+    repeats: dict[str, int] = field(default_factory=dict)  # 連続して失敗している同一の呼び出し（ツール名＋引数 → 回数）
+    abort: str | None = None  # 同じ失敗の繰り返しで止めるときの、利用者向けの説明
 
 
 _THINK = re.compile(r"<think>.*?(</think>|$)", re.S)
@@ -55,8 +59,11 @@ class Agent:
                  max_tool_calls: int = 20, max_llm_turns: int = 25,
                  slots: SlotPool | None = None, force_rules: list[dict[str, Any]] | None = None,
                  approval_ttl: float = 600.0, bridge: DeviceBridge | None = None, updater: Any = None) -> None:
-        # force_rules: [{"pattern": 正規表現, "tools": [ツール名...]}]。依頼が一致したら、最初の1回はそのツールの呼び出しを強制する
-        self.force_rules = [(re.compile(r["pattern"]), list(r["tools"])) for r in (force_rules or [])]
+        # force_rules: [{"pattern": 正規表現, "tools": [ツール名...], "history_pattern": 正規表現（省略可）}]。
+        # 依頼が一致したら、最初の1回はそのツールの呼び出しを強制する。history_pattern があれば、直前のアシスタントの発言にも一致したときだけ
+        # （例:「はい」という短い返事は、直前に計画の確認があったときだけ、実行の開始として扱う）
+        self.force_rules = [(re.compile(r["pattern"]), list(r["tools"]), re.compile(r["history_pattern"]) if r.get("history_pattern") else None)
+                            for r in (force_rules or [])]
         self.llm, self.registry, self.audit = llm, registry, audit
         self.max_tool_calls, self.max_llm_turns = max_tool_calls, max_llm_turns
         self.slots = slots or SlotPool()
@@ -93,11 +100,12 @@ class Agent:
                          tool_calls=result.tool_calls, result_summary=result.answer[:200])
         return result
 
-    def _forced_tools(self, request: str) -> set[str]:
+    def _forced_tools(self, request: str, history: list[dict[str, Any]] | None = None) -> set[str]:
         """依頼に一致するルールのツール名（登録済みのものだけ）。無ければ空。"""
         names: set[str] = set()
-        for pattern, tools in self.force_rules:
-            if pattern.search(request):
+        last_assistant = next((m.get("content", "") for m in reversed(history or []) if m.get("role") == "assistant"), "")
+        for pattern, tools, hist in self.force_rules:
+            if pattern.search(request) and (hist is None or hist.search(last_assistant)):
                 names.update(t for t in tools if self.registry.get(t))
         return names
 
@@ -118,7 +126,7 @@ class Agent:
         res = AgentResult(request_id=rid, answer="", tainted=tainted)
         tools = self.registry.openai_tools()
         retried = False
-        forced = self._forced_tools(request)
+        forced = self._forced_tools(request, history)
         if forced:
             self.audit.write("forced_tools", rid, tools=sorted(forced))
         for turn in range(self.max_llm_turns):
@@ -161,6 +169,11 @@ class Agent:
                 res.tool_calls += 1
                 content = self._execute(rid, request, call, res, emit)
                 messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": content})
+                if res.abort:   # 同じ失敗の繰り返し（小さなモデルが、手がかりなく同じ呼び出しを続ける）
+                    res.stopped_reason, res.answer = "repeat_failure", res.abort
+                    self.audit.write("repeat_failure", rid, tool=res.trace[-1]["tool"] if res.trace else "")
+                    emit({"type": "message", "text": res.answer})
+                    return res
         res.stopped_reason = "turn_limit"
         res.answer = f"モデルへの問い合わせ回数の上限（{self.max_llm_turns}回）に達したため停止しました。"
         self.audit.write("limit_reached", rid, limit=self.max_llm_turns, kind="llm_turns")
@@ -216,7 +229,21 @@ class Agent:
             out = spec.handler(args)
         except Exception as e:  # ツールの失敗はモデルに返し、ループは続ける
             return finish("error", {"error": f"{type(e).__name__}: {e}"}, spec.level.name, args)
-        if spec.reads_private and not (isinstance(out, dict) and out.get("error")):
+        failed = isinstance(out, dict) and bool(out.get("error"))
+        if spec.reads_private and not failed:
             res.tainted = True
             self.audit.write("tainted", rid, tool=name)
+        # 連続して同じ呼び出し（同じ引数）が失敗し続けたら、ヒントを返し、さらに続けば止める
+        key = name + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        if failed:
+            n = res.repeats.get(key, 0) + 1
+            res.repeats = {key: n}   # 別の呼び出しを挟んだら数え直す
+            if n >= REPEAT_HINT_AT:
+                out = {**out, "hint": f"同じ呼び出しが {n} 回続けて失敗しています。同じ引数での再試行はやめて、現在の状態（dev_read など）を確かめ、"
+                                      "引数や手順を変えてください。それでも進まなければ、止まって報告してください。"}
+            if n >= REPEAT_STOP_AT:
+                res.abort = (f"同じ操作（{name}）が {n} 回続けて同じ理由で失敗したため、停止しました。"
+                             "ここまでの経過は監査ログに記録されています。状況を確認して、もう一度依頼してください。")
+        else:
+            res.repeats = {}
         return finish("ok", out, spec.level.name, args)

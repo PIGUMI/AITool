@@ -52,6 +52,7 @@ def env(tmp_path, monkeypatch):
     gh = FakeGitHub()
     cfg = {"work_dir": str(tmp_path / "work"), "repos": [{"name": "proj", "remote_url": str(bare), "base_ref": "origin/main", "github_repo": "o/r",
                                                           "test": [sys.executable, "-c", "pass"]}]}
+    cfg["require_tests_before_commit"] = False   # このテストは push と PR が対象。コミットの条件は test_dev.py で確認
     d = Dev(cfg, free_mb=lambda: 99999, http=gh)
     tools = {t.name: t for t in build_tools(cfg, d)}
     wid = tools["dev_start"].handler({"repo": "proj", "slug": "feat-x"})["worktree"]

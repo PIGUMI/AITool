@@ -16,7 +16,7 @@ timeout_seconds = 120
 chat_template_kwargs = { enable_thinking = false }
 
 [agent]
-max_tool_calls = 20           # 1回の依頼で実行できるツール呼び出しの上限
+max_tool_calls = 40           # 1回の依頼で実行できるツール呼び出しの上限（開発の依頼は、読む・書く・テストで手数がかかるため）
 max_llm_turns = 25            # モデルへの問い合わせ回数の上限（無限ループ防止）
 approval_ttl_seconds = 600    # R2 の承認要求の有効期限（10分）
 
