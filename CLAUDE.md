@@ -130,7 +130,7 @@
 - 作業は必ず feature/* ブランチ・git worktree で行い、常駐PCのメインのチェックアウトは触らない
 - ビルドが通るまでの自己修正ループは **上限5回** とし、超えたら途中経過と詰まった箇所を報告して停止する
 - mainへの直接push、force push、ブランチ削除は実装しない（R3）
-- 実装: `tools/dev`（dev_start / dev_files / dev_read / dev_write / dev_run / dev_diff / dev_commit / dev_push(R2) / dev_pr_draft(R2)）。専用 clone（`work_dir/clones/<repo>`）と worktree（`work_dir/worktrees/<repo>/<slug>`）の中だけで動く。
+- 実装: `tools/dev`（dev_start / dev_files / dev_read / dev_write / dev_run / dev_diff / dev_commit / dev_push(R2) / dev_pr_draft(R2) / **dev_submit(R2)**）。dev_submit は push と下書き PR の作成（GitHub API、権限を絞ったトークン）を1回の承認で行い、承認要求の時点の HEAD をハッシュに束ねる（承認後に変わったコミットは出ない）。マージは人が行う（docs/setup-github.md）。専用 clone（`work_dir/clones/<repo>`）と worktree（`work_dir/worktrees/<repo>/<slug>`）の中だけで動く。
   実行できるのは config の `[[dev.repos]]` に書いた build/test コマンドだけ（任意コマンド不可、環境変数は最小限）。空きメモリが下限を下回るときは開始しない。コミットは秘匿ファイルが含まれていたら拒否する
 
 ### 4.6 notify（R1）

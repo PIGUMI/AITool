@@ -201,6 +201,11 @@ class Agent:
             return finish("denied", {"error": "このツールは実行できません"}, spec.level.name, args)
         if disp is Disposition.REQUIRES_APPROVAL:
             # R2は実行しない。承認要求を作り、ユーザーが承認画面で承認したときに、保存した操作が1回だけ実行される。
+            if spec.bind:  # 承認要求を作る時点の状態を引数に束ね、操作のハッシュに含める（承認のあとで状態が変わったら実行しない）
+                try:
+                    args = {**args, **spec.bind(args)}
+                except Exception as e:
+                    return finish("error", {"error": f"承認要求を作れませんでした: {type(e).__name__}"}, spec.level.name, args)
             summary = spec.summarizer(args) if spec.summarizer else ""
             ap = self.approvals.request(rid, name, args, summary)
             emit({"type": "approval", "approval_id": ap["id"], "tool": name, "summary": ap["summary"]})

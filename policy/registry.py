@@ -17,6 +17,7 @@ class ToolSpec:
     level: Level | None
     handler: Callable[[dict[str, Any]], Any]
     summarizer: Callable[[dict[str, Any]], str] | None = None  # R2: 承認画面に出す「何をするか」の要約
+    bind: Callable[[dict[str, Any]], dict[str, Any]] | None = None  # R2: 承認要求を作る時点の状態（例: コミットの HEAD）を引数に束ねる。ハッシュに含まれ、承認後に状態が変わっていれば実行されない
     reads_private: bool = False  # 端末のファイルなど私的なデータを読む。成功すると、その依頼では egress ツールが使えなくなる
     egress: bool = False         # 外部（インターネット・通知先）へ情報が出ていく可能性がある
 
