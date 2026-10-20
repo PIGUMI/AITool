@@ -13,7 +13,7 @@ Faraway の画面（チャット・管理）はサーバーが配信する。ア
 ### ビルド（Windows 標準の C# コンパイラを使う。追加のインストールは不要）
 ```powershell
 cd $HOME\Documents\AITool
-powershell -File apps\windows\build.ps1        # → dist\Faraway.exe
+powershell -ExecutionPolicy Bypass -File apps\windows\build.ps1        # → dist\Faraway.exe
 ```
 
 ### 使い方
