@@ -356,3 +356,37 @@ def test_exe_build_runs_the_release_script_with_a_process_scoped_policy_bypass(w
     assert out["steps"]["exe"] == "built"
     assert calls and "-ExecutionPolicy" in calls[0] and calls[0][calls[0].index("-ExecutionPolicy") + 1] == "Bypass"
     assert calls[0][-2] == "-File" and calls[0][-1].endswith("build.ps1")
+
+
+# --- 承認が複数並んだときの安全策（実機で見つかった: 試用期間中に次の更新を重ねると、直前の更新が失敗扱いになった）---
+def test_apply_refuses_while_previous_update_is_in_probation(world):
+    up, cur, v2 = prepared_world(world)
+    v3 = commit(world["work"], {"app.txt": "v3"}, "v3")
+    up.prepare()
+    assert up.apply(v2)["applied"] == v2[:12]                                 # 1つ目の承認: 適用される
+    world["state"]["version"] = v2                                            # 新しい版で再起動した（試用期間中: pending.json が残っている）
+    with pytest.raises(UpdateError, match="試用期間中"):
+        up.apply(v3)                                                          # 2つ目の承認: 重ねて適用はできない
+    assert (world["inst"] / "current.txt").read_text() == v2[:12] and world["state"]["restarts"] == 1
+    (world["inst"] / "pending.json").unlink()                                 # 確定して試用期間が終わったら、次へ進める
+    assert up.apply(v3)["applied"] == v3[:12] and world["state"]["restarts"] == 2
+
+
+def test_apply_refuses_older_or_unrelated_versions(world):
+    up, cur, v2 = prepared_world(world)
+    world["state"]["version"] = v2                                            # いま v2 で動いている
+    (world["inst"] / "current.txt").write_text(v2[:12])
+    old = world["inst"] / "releases" / cur                                    # 古い v1 も「検証済み」として残っている
+    (old / "VERIFIED").write_text("{}")
+    (old / "RELEASE").write_text(world["v1"])
+    with pytest.raises(UpdateError, match="子孫"):
+        up.apply(world["v1"])                                                 # 古い版へは、更新では行けない
+    assert world["state"]["restarts"] == 0 and (world["inst"] / "current.txt").read_text() == v2[:12]
+    world["state"]["version"] = "unknown"                                     # 動いている版が分からない場合も、拒否する（安全側）
+    with pytest.raises(UpdateError, match="子孫"):
+        up.apply(v2[:12] + "0" * 28 if False else world["v1"])
+
+
+def test_forward_update_still_works_after_guards(world):
+    up, cur, v2 = prepared_world(world)
+    assert up.apply(v2)["restart_requested"] is True
