@@ -242,7 +242,9 @@ class Updater:
                 steps["exe"] = "not_built"
                 build = tmp / "apps" / "windows" / "build.ps1"
                 if self.build_exe and os.name == "nt" and build.is_file():
-                    code, out = sh("build Faraway.exe", ["powershell", "-NoProfile", "-File", str(build)], 300)
+                    # 検証済みリリース自身のビルドスクリプトだけに、この1回の実行で実行ポリシーを緩める（環境を絞っているため、
+                    # ユーザーの既定の設定が引き継がれず、スクリプトの実行が禁止されることがある）
+                    code, out = sh("build Faraway.exe", ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(build)], 300)
                     steps["exe"] = "built" if code == 0 and (tmp / "dist" / "Faraway.exe").is_file() else "failed"   # EXE の失敗は適用を止めない
             finally:
                 shutil.rmtree(iso, ignore_errors=True)

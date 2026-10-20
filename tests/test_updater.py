@@ -333,3 +333,26 @@ def test_bootstrap_imports_head_and_installs_supervisor_and_config(world, tmp_pa
 def test_bootstrap_reports_dirty_checkout(world, tmp_path):
     (world["work"] / "uncommitted.txt").write_text("x")
     assert bootstrap(world["work"], tmp_path / "boot2")["dirty_checkout"] is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows 用のビルド手順")
+def test_exe_build_runs_the_release_script_with_a_process_scoped_policy_bypass(world):
+    """環境を絞った実行でも、リリース自身の build.ps1 が実行ポリシーで止まらないこと（実機で見つかった不具合の再発防止）。"""
+    commit(world["work"], {"apps/windows/build.ps1": "# build", "app.txt": "v2"}, "v2 with build script")
+    calls = []
+    real = subprocess.run
+
+    def fake_run(cmd, **kw):
+        if cmd and cmd[0] == "powershell":
+            calls.append(cmd)
+            Path(kw["cwd"], "dist").mkdir(exist_ok=True)
+            Path(kw["cwd"], "dist", "Faraway.exe").write_bytes(b"MZ")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return real(cmd, **kw)
+
+    up = world["make"](build_exe=True)
+    up.run = fake_run
+    out = up.prepare()
+    assert out["steps"]["exe"] == "built"
+    assert calls and "-ExecutionPolicy" in calls[0] and calls[0][calls[0].index("-ExecutionPolicy") + 1] == "Bypass"
+    assert calls[0][-2] == "-File" and calls[0][-1].endswith("build.ps1")

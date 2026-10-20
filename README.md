@@ -11,7 +11,7 @@ python -m core.cli "GPUの状態は？"     # CLI
 ASSISTANT_INTEGRATION=1 python -m pytest -m integration   # 実機（llama.cpp）接続
 ```
 ## アプリ（Windows EXE / Android）
-`powershell -File apps\windows\build.ps1` で `dist\Faraway.exe` を作れる。Android は PWA（ホーム画面に追加）と、Android Studio でビルドする APK プロジェクト（`apps/android`）。詳しくは `docs/app-setup.md`。
+`powershell -ExecutionPolicy Bypass -File apps\windows\build.ps1` で `dist\Faraway.exe` を作れる。Android は PWA（ホーム画面に追加）と、Android Studio でビルドする APK プロジェクト（`apps/android`）。詳しくは `docs/app-setup.md`。
 
 ## Android など別端末のブラウザから使う
 1. `config/config.toml` の `[api]` に待ち受けアドレスを書く（未設定なら `host` の 127.0.0.1 のみ）:
