@@ -291,6 +291,18 @@ class Updater:
             raise UpdateError("現在の版がリリースとして保存されていません（初回は python -m core.updater bootstrap が必要です）")
         if cur == name:
             raise UpdateError("すでにその版で動いています")
+        if (self.install / "pending.json").is_file():
+            # 承認要求が複数並んでいても、試用期間中に次の切り替えを重ねない（重ねると、直前の更新が失敗扱いになる）
+            raise UpdateError("直前の更新が試用期間中です。正常に動き続けて確定してから、次の更新を適用してください")
+        # 前向きの更新だけを許す: 動いている版が、適用する版の祖先でなければ拒否する（古い版・分岐した版へは更新では行かない）
+        try:
+            target = (self._rel(name) / "RELEASE").read_text(encoding="utf-8").strip()
+            running = self.version()
+            forward = running != "unknown" and self._git("merge-base", "--is-ancestor", running, target, check=False) == "0"
+        except (OSError, UpdateError):
+            forward = False
+        if not forward:
+            raise UpdateError("動いている版より新しい版（子孫）ではないため、更新では適用できません。古い版へ戻すときは update_rollback を使ってください")
         self._write("previous.txt", cur)
         self._write("current.txt", name)
         self._write("pending.json", json.dumps({"from": cur, "to": name, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}))
