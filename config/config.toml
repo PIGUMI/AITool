@@ -20,35 +20,13 @@ max_tool_calls = 20           # 1回の依頼で実行できるツール呼び�
 max_llm_turns = 25            # モデルへの問い合わせ回数の上限（無限ループ防止）
 approval_ttl_seconds = 600    # R2 の承認要求の有効期限（10分）
 
+# 依頼の内容に応じて、最初の1回のツール呼び出しを強制するルール（9B が記憶や推測で答えるのを防ぐ）の既定値は、
+# コード（core/prompts.py の DEFAULT_FORCE_RULES）にあり、自己更新で新しくなる。ここには追加したいルールだけを書く:
+# [[agent.force_tools]]
+# pattern = "正規表現"
+# tools = ["ツール名"]
+
 # 9B が記憶や推測で答えてしまうのを防ぐ。依頼が pattern（正規表現）に一致したら、最初の1回は tools のどれかの呼び出しを強制する。
-[[agent.force_tools]]
-pattern = "出典|調べて|調べ物|最新|ニュース|ウェブ|Web|URL|https?://"
-tools = ["web_search", "web_fetch"]
-
-[[agent.force_tools]]
-pattern = "リポジトリ|実装|ソース|コード|関数|クラス|コミット|履歴|ブランチ|どこ.*(書|定義|実装)"
-tools = ["search", "repo_read", "git_info"]
-
-[[agent.force_tools]]
-pattern = "このPC|この端末|スマホの|端末の|PCの(ファイル|フォルダ)|ドキュメント|デスクトップ|ダウンロードフォルダ|フォルダの中"
-tools = ["device_info", "device_list", "device_read"]
-
-[[agent.force_tools]]
-pattern = "アップデート|自己更新|最新版|Faraway.{0,6}更新|バージョン"
-tools = ["update_check"]
-
-[[agent.force_tools]]
-pattern = "今日|今何時|現在時刻|何曜日|日付|今の時間"
-tools = ["current_time"]
-
-[[agent.force_tools]]
-pattern = "GPU|VRAM|CPU|メモリ|ディスク|空き容量|サーバーの状態|PCの状態"
-tools = ["host_status"]
-
-[[agent.force_tools]]
-pattern = "ping|疎通|生きてる|起動してる|LAN"
-tools = ["network"]
-
 [slots]
 # llama.cpp は 2 スロット。対話を1本、夜間バッチを1本に分ける。
 interactive = 1

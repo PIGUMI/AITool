@@ -27,7 +27,7 @@
 </style>
 </head>
 <body>
-<header><strong>Faraway</strong><span><a href="/admin" style="color:var(--accent);margin-right:12px">管理</a><button id="tok" type="button">トークン設定</button></span></header>
+<header><strong>Faraway</strong><span><a href="/admin" style="color:var(--accent);margin-right:12px">管理</a><button id="newc" type="button">新しい会話</button> <button id="tok" type="button">トークン設定</button></span></header>
 <div id="log" aria-live="polite"></div>
 <form id="f"><textarea id="q" rows="2" placeholder="依頼を入力（例：GPUの状態は？）"></textarea><button id="send">送信</button></form>
 <script>
@@ -38,6 +38,10 @@ const set = v => { try { localStorage.setItem('assistant_token', v); } catch {} 
 (() => { const m = location.hash.match(/token=([^&]+)/); if (m) { set(decodeURIComponent(m[1])); history.replaceState(null, '', location.pathname); } })();
 // アプリとしてインストールできるようにする（HTTPS のときだけ有効。HTTP では何も起きない）
 try { if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js'); } catch (e) {}
+// 会話ID: 同じ会話の中では、直前のやり取りをサーバーが文脈として使う（「1」のような短い返事が通じる）。ページを開き直す／「新しい会話」で新しくなる
+const newId = () => { try { return crypto.randomUUID().replace(/-/g, ''); } catch { return Math.random().toString(36).slice(2) + Date.now().toString(36); } };
+let cid = newId();
+document.getElementById('newc').onclick = () => { cid = newId(); log.replaceChildren(); add('tool', '新しい会話を始めました（これまでの文脈は使いません）。'); };
 function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
 document.getElementById('tok').onclick = () => { const v = prompt('APIトークンを入力（この端末のブラウザにだけ保存されます）', ''); if (v !== null) set(v.trim()); };
 document.getElementById('f').onsubmit = async e => {
@@ -46,7 +50,7 @@ document.getElementById('f').onsubmit = async e => {
   if (!get()) { add('err', '先に「トークン設定」でAPIトークンを入力してください。'); return; }
   add('user', text); q.value = ''; send.disabled = true;
   try {
-    const r = await fetch('/api/chat', { method:'POST', headers:{ 'Authorization':'Bearer ' + get(), 'Content-Type':'application/json' }, body: JSON.stringify({ request:text }) });
+    const r = await fetch('/api/chat', { method:'POST', headers:{ 'Authorization':'Bearer ' + get(), 'Content-Type':'application/json' }, body: JSON.stringify({ request:text, conversation:cid }) });
     if (r.status === 401) { add('err', '認証に失敗しました。トークンを確認してください。'); return; }
     if (!r.ok) { add('err', 'エラー: HTTP ' + r.status); return; }
     const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
