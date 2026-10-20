@@ -63,6 +63,10 @@ def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = N
         audit.add_secret(key)
         llm = LLMClient(cfg["llm"]["endpoints"], key, cfg["llm"].get("model", "qwen3.5-9b"),
                         cfg["llm"].get("timeout_seconds", 120), extra=llm_extra(cfg))
+    try:  # GitHub のトークンがあれば、ログに値が出ないよう、マスク対象に加える（値は読み込むだけ。ツール側で使う）
+        audit.add_secret(read_secret(cfg.get("dev", {}).get("github_token_file", "github_token.txt")))
+    except FileNotFoundError:
+        pass
     slots = SlotPool(cfg["slots"]["interactive"], cfg["slots"]["batch"])
     bridge = DeviceBridge()
     ucfg = cfg.get("update", {})
