@@ -39,6 +39,18 @@ class UpdateError(Exception):
     """利用者に見せてよいエラー。"""
 
 
+PR_MERGE = re.compile(r"^Merge pull request #(\d+) from \S+")
+
+
+def _title_of(subject: str, body: str) -> dict[str, Any]:
+    """コミットの題名から、人が読める題名と PR 番号を取り出す。「Merge pull request #7 from …」なら、本文の1行目（PR のタイトル）を使う。"""
+    m = PR_MERGE.match(subject)
+    if not m:
+        return {"title": subject, "pr": None}
+    first = next((l.strip() for l in body.splitlines() if l.strip()), "")
+    return {"title": first or subject, "pr": int(m.group(1))}
+
+
 def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k.upper() in ENV_KEEP}
     env.update(GIT_TERMINAL_PROMPT="0", GIT_PAGER="cat", PYTHONDONTWRITEBYTECODE="1")
@@ -130,9 +142,10 @@ class Updater:
             state = "up_to_date"
         elif self._git("merge-base", "--is-ancestor", cur, latest, check=False) == "0":
             state = "behind"
-            for line in self._git("log", "--format=%H|%an|%ad|%s", "--date=short", f"{cur}..{latest}").splitlines()[:30]:
-                sha, author, date, subject = line.split("|", 3)
-                commits.append({"sha": sha, "author": author, "date": date, "subject": subject})
+            log = self._git("log", "--format=%H%x1f%an%x1f%ad%x1f%s%x1f%b%x1e", "--date=short", f"{cur}..{latest}")
+            for rec in [r for r in log.split("\x1e") if r.strip()][:30]:
+                sha, author, date, subject, body = (rec.strip("\n").split("\x1f") + [""] * 5)[:5]
+                commits.append({"sha": sha, "author": author, "date": date, "subject": subject, **_title_of(subject, body)})
         elif self._git("merge-base", "--is-ancestor", latest, cur, check=False) == "0":
             state = "ahead"        # 手元の版のほうが新しい（開発中のコミットなど）
         else:
@@ -147,6 +160,61 @@ class Updater:
     def prepared(self) -> list[str]:
         d = self.install / "releases"
         return sorted(p.name for p in d.iterdir() if (p / "VERIFIED").is_file()) if d.is_dir() else []
+
+    def _describe(self, sha: str) -> dict[str, Any]:
+        """コミットの内容（PR のタイトル・番号・日時）。更新用リポジトリに無ければ、分かる範囲で返す。"""
+        try:
+            out = self._git("log", "-1", "--format=%s%x1f%b%x1f%cd%x1f%ct", "--date=format:%Y-%m-%d %H:%M", sha)
+            subject, body, date, ts = (out.rstrip("\n").split("\x1f") + ["", "", "", "0"])[:4]
+        except UpdateError:
+            return {"title": "", "subject": "", "pr": None, "date": "", "ts": 0}
+        return {**_title_of(subject, body), "subject": subject, "date": date.strip(), "ts": int(ts) if ts.strip().isdigit() else 0}
+
+    def prepared_details(self) -> list[dict[str, Any]]:
+        """検証済みのリリースを、ID ではなく、内容（PR のタイトル）・日時・現在の版との関係で返す。新しい順。
+        relation: current=いま動いている版 / newer=現在より新しい（適用できる）/ older=古い（適用できない）/ bad=以前の更新で失敗 / other=それ以外"""
+        running, cur, prev, bad = self.version(), self._read("current.txt"), self._read("previous.txt"), set(self.bad())
+        out: list[dict[str, Any]] = []
+        for name in self.prepared():
+            meta = self._json_file(self._rel(name) / "VERIFIED")
+            sha = str(meta.get("sha") or "")
+            if not sha:
+                try:
+                    sha = (self._rel(name) / "RELEASE").read_text(encoding="utf-8").strip()
+                except OSError:
+                    sha = name
+            if name == cur:
+                rel = "current"
+            elif name in bad:
+                rel = "bad"
+            elif running != "unknown" and self._git("merge-base", "--is-ancestor", running, sha, check=False) == "0":
+                rel = "newer"
+            elif running != "unknown" and self._git("merge-base", "--is-ancestor", sha, running, check=False) == "0":
+                rel = "older"
+            else:
+                rel = "other"
+            out.append({"name": name, "sha": sha, **self._describe(sha), "relation": rel, "is_previous": name == prev,
+                        "verified_at": meta.get("at"), "steps": meta.get("steps") or {}})
+        return sorted(out, key=lambda r: (r["ts"], r["name"]), reverse=True)   # コミット時刻（秒）の新しい順
+
+    def apply_summary(self, sha: str) -> str:
+        """承認画面に出す要約: 何の更新か（PR のタイトル・日時）と、版の ID。"""
+        name = (sha or "")[:12]
+        try:
+            full = (self._rel(name) / "RELEASE").read_text(encoding="utf-8").strip()
+        except OSError:
+            full = sha
+        d = self._describe(full) if full else {"title": "", "pr": None, "date": ""}
+        label = (f"PR #{d['pr']}: " if d.get("pr") else "") + (d.get("title") or "（内容を取得できませんでした）")
+        return (f"Faraway を更新して再起動します。\n内容: {label}" + (f"（{d['date']}）" if d.get("date") else "") +
+                f"\n版: {self.version()[:12]} → {name}（自己検査・テストは通過済み。起動に失敗したら自動で元に戻ります）")
+
+    @staticmethod
+    def _json_file(p: Path) -> dict[str, Any]:
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
 
     # --- 準備（展開・検証）---
     def _resolve_target(self, sha: str | None, info: dict[str, Any]) -> str:
@@ -346,7 +414,7 @@ class Updater:
         return {"version": self.version(), "supervised": self.is_supervised(), "install_dir": str(self.install), "busy": self.busy,
                 "current_release": self._read("current.txt"), "previous_release": self._read("previous.txt"),
                 "pending": self._json("pending.json") or None, "last_update": self._json("last_update.json") or None,
-                "last_check": self._json("status.json") or None, "prepared": self.prepared(), "bad": self.bad(),
+                "last_check": self._json("status.json") or None, "prepared": self.prepared(), "prepared_details": self.prepared_details(), "bad": self.bad(),
                 "last_prepare": self.last_prepare,
                 "remote": self.remote, "branch": self.branch}
 

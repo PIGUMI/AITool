@@ -390,3 +390,62 @@ def test_apply_refuses_older_or_unrelated_versions(world):
 def test_forward_update_still_works_after_guards(world):
     up, cur, v2 = prepared_world(world)
     assert up.apply(v2)["restart_requested"] is True
+
+
+# --- 管理画面で、ID ではなく内容（PR のタイトル・日時・現在の版との関係）で見せる ---
+def merge_commit(work: Path, number: int, branch: str, title: str) -> str:
+    git(work, "commit", "-q", "--allow-empty", "-m", f"Merge pull request #{number} from o/{branch}", "-m", title)
+    git(work, "push", "-q", "origin", "HEAD:main")
+    return git(work, "rev-parse", "HEAD")
+
+
+def test_title_of_uses_the_pr_title_for_merge_commits():
+    from core.updater import _title_of
+    assert _title_of("Merge pull request #7 from o/feature/x", "\n機能 X を追加\n\n詳細") == {"title": "機能 X を追加", "pr": 7}
+    assert _title_of("Merge pull request #7 from o/feature/x", "") == {"title": "Merge pull request #7 from o/feature/x", "pr": 7}   # 本文が無ければ題名
+    assert _title_of("通常のコミット: 修正", "本文") == {"title": "通常のコミット: 修正", "pr": None}
+
+
+def test_check_commits_carry_readable_titles(world):
+    v2 = merge_commit(world["work"], 7, "feature/x", "機能 X を追加")
+    v3 = commit(world["work"], {"a.txt": "1"}, "通常のコミット")
+    commits = world["make"]().check()["commits"]
+    assert [(c["pr"], c["title"]) for c in commits] == [(None, "通常のコミット"), (7, "機能 X を追加")]       # 新しい順
+    assert commits[1]["subject"].startswith("Merge pull request #7")
+
+
+def test_prepared_details_describes_each_release_and_its_relation_to_the_running_version(world):
+    up, cur, _ = prepared_world(world)                                       # v1 が現在、v2 が準備済み
+    (world["inst"] / "releases" / cur / "VERIFIED").write_text(json.dumps({"sha": world["v1"], "steps": {"bootstrap": "imported"}}))
+    v3 = merge_commit(world["work"], 8, "feature/y", "機能 Y を追加")
+    up.prepare()                                                              # v3 も準備済み
+    (world["inst"] / "bad.txt").write_text("deadbeef0000\n")
+    bad = world["inst"] / "releases" / "deadbeef0000"
+    bad.mkdir()
+    (bad / "VERIFIED").write_text(json.dumps({"sha": "d" * 40}))
+    rows = {r["name"]: r for r in up.prepared_details()}
+    assert rows[cur]["relation"] == "current" and rows[world["v1"][:12]]["sha"] == world["v1"]
+    assert rows[v3[:12]]["relation"] == "newer" and rows[v3[:12]]["pr"] == 8 and rows[v3[:12]]["title"] == "機能 Y を追加" and rows[v3[:12]]["date"]
+    assert rows[v3[:12]]["steps"]["tests"] == "passed"
+    assert rows["deadbeef0000"]["relation"] == "bad"
+    dates = [r["date"] for r in up.prepared_details()]
+    assert dates == sorted(dates, reverse=True)                              # 新しい順
+
+
+def test_older_release_is_labelled_older(world):
+    up, cur, v2 = prepared_world(world)
+    world["state"]["version"] = v2                                           # いま v2 で動いている
+    (world["inst"] / "current.txt").write_text(v2[:12])
+    (world["inst"] / "releases" / cur / "VERIFIED").write_text(json.dumps({"sha": world["v1"]}))
+    rows = {r["name"]: r for r in up.prepared_details()}
+    assert rows[cur]["relation"] == "older" and rows[v2[:12]]["relation"] == "current"
+
+
+def test_status_includes_prepared_details_and_apply_summary_is_readable(world):
+    up, cur, _ = prepared_world(world)
+    v3 = merge_commit(world["work"], 9, "feature/z", "機能 Z を追加")
+    up.prepare()
+    assert [r["name"] for r in up.status()["prepared_details"] if r["relation"] == "newer"][0] == v3[:12]
+    text = up.apply_summary(v3)
+    assert "PR #9: 機能 Z を追加" in text and f"{world['v1'][:12]} → {v3[:12]}" in text and "自動で元に戻ります" in text
+    assert "（内容を取得できませんでした）" in up.apply_summary("f" * 12)       # 内容が分からなくても、要約は作れる

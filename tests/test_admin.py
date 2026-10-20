@@ -328,3 +328,12 @@ def test_enable_tls_with_bad_files_raises(tmp_path, audit):
     with pytest.raises(Exception):
         enable_tls(s, str(tmp_path / "none.crt"), str(tmp_path / "none.key"))
     s.server_close()
+
+
+def test_admin_update_tab_shows_readable_release_names_not_only_ids(srv):
+    base, *_ = srv
+    html = get(base + "/admin").read().decode()
+    assert "prepared_details" in html and "d.title" in html and "PR #" in html          # PR のタイトルで見せる
+    assert "最新（適用できます）" in html and "古い版（適用できません）" in html and "以前の更新で失敗した版" in html   # 現在の版との関係
+    assert "迷ったら、「最新」と書かれた 1 つだけ" in html and "d.relation === 'newer'" in html                  # 適用できるのは新しい版だけ
+    assert "whiteSpace = 'pre-wrap'" in html                                              # 承認画面の要約の改行を保つ

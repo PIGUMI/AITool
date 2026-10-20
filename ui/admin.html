@@ -112,12 +112,16 @@ const views = {
       if (s.enabled === false) { v.replaceChildren(el('p', 'mute', '自己更新は有効ではありません（config の [update] remote_url が未設定）。')); return; }
       const top = el('div', 'card'), kv = el('div', 'kv');
       const row = (k, val) => { kv.append(el('div', 'mute', k), el('div', '', val)); };
-      row('現在の版', (s.version || '').slice(0, 12) || '-');
+      // ID だけでは分からないので、検証済みリリースの情報（PR のタイトル）で言い換える
+      const byName = Object.fromEntries((s.prepared_details || []).map(d => [d.name, d]));
+      const nm = n => { const d = byName[n]; return d ? `${d.pr ? 'PR #' + d.pr + ': ' : ''}${d.title || n}` : (n || '-'); };
+      const stJa = { applied: '適用完了', rolled_back: '自動で前の版に戻しました（新しい版が起動に失敗）', manual_rollback: '手動で前の版に戻しました', rollback_failed: 'ロールバックに失敗しました' };
+      row('現在の版', `${nm((s.version || '').slice(0, 12))}（ID ${(s.version || '').slice(0, 12) || '-'}）`);
       row('更新元', `${s.remote}（${s.branch}）`);
       row('スーパーバイザー', s.supervised ? '経由で起動中（適用・自動ロールバックが可能）' : '経由していません（確認・準備まで。適用には supervisor.py での起動が必要）');
-      row('現在 / 直前のリリース', `${s.current_release || '-'} / ${s.previous_release || '-'}`);
-      if (s.pending) row('試用期間中', `${s.pending.from} → ${s.pending.to}（正常に動き続けると確定。失敗すると自動で戻ります）`);
-      if (s.last_update) row('直近の更新', `${s.last_update.status}: ${s.last_update.from || '-'} → ${s.last_update.to || '-'}${s.last_update.reason ? '（' + s.last_update.reason + '）' : ''}`);
+      row('直前の版（戻せる版）', s.previous_release ? `${nm(s.previous_release)}（ID ${s.previous_release}）` : 'なし');
+      if (s.pending) row('試用期間中', `${nm(s.pending.from)} → ${nm(s.pending.to)}（正常に動き続けると確定。失敗すると自動で戻ります）`);
+      if (s.last_update) row('直近の更新', `${stJa[s.last_update.status] || s.last_update.status}: ${nm(s.last_update.from)} → ${nm(s.last_update.to)}${s.last_update.reason ? '（' + s.last_update.reason + '）' : ''}`);
       if (s.busy) row('作業中', s.busy);
       top.appendChild(kv); box.appendChild(top);
       const bar = el('div', 'row'), chk = el('button', '', '更新を確認'), prep = el('button', '', '最新を検証して準備（テスト）'), back = el('button', 'danger', '直前の版に戻す（承認を作成）');
@@ -131,7 +135,7 @@ const views = {
         const c = el('div', 'card');
         c.append(el('strong', '', { up_to_date: '最新です', behind: `更新があります（${lc.commits.length}件）`, ahead: '手元の版のほうが新しい（開発中）', diverged: '履歴が分岐しています（自動では更新しません）', current_unknown: '現在の版が不明です' }[lc.state] || lc.state),
                  el('div', 'mute', `最新 ${lc.latest.slice(0, 12)} · 確認 ${lc.checked_at} · ${lc.note}`));
-        for (const k of lc.commits) c.appendChild(el('div', '', `${k.sha.slice(0, 7)} ${k.date} ${k.author}: ${k.subject}`));
+        for (const k of lc.commits) c.appendChild(el('div', '', `${k.date}  ${k.pr ? 'PR #' + k.pr + ': ' : ''}${k.title || k.subject}`));
         box.appendChild(c);
       }
       if (s.last_prepare) {
@@ -141,15 +145,28 @@ const views = {
         if (p.result && p.result.steps) c.appendChild(el('div', 'mute', Object.entries(p.result.steps).map(([k, x]) => `${k}: ${x}`).join(' / ')));
         box.appendChild(c);
       }
-      if (s.prepared && s.prepared.length) {
-        const c = el('div', 'card'); c.appendChild(el('strong', '', '検証済みのリリース'));
-        for (const name of s.prepared) {
-          const r = el('div', 'row'); r.appendChild(el('span', 'grow', name + (name === s.current_release ? '（現在）' : '')));
-          if (name !== s.current_release) { const b = el('button', '', '適用（承認を作成）'); b.disabled = !s.supervised;
-            b.onclick = () => act(async () => { await post('/api/update/apply', { sha: name }); alert('承認要求を作りました。「承認」タブで内容を確認して承認してください。'); show('approvals'); }); r.appendChild(b); }
-          c.appendChild(r);
+      if (s.prepared_details && s.prepared_details.length) {
+        // 検証済みのリリース: ID ではなく、変更の内容（PR のタイトル）・日時・現在の版との関係で見せる
+        const head = el('div', 'card'); head.append(el('strong', '', '検証済みのリリース'),
+          el('div', 'mute', '適用できるのは、いま動いている版より新しいものだけです。迷ったら、「最新」と書かれた 1 つだけを適用してください。'));
+        box.appendChild(head);
+        const label = { current: ['いま動いている版', 'done'], newer: ['新しい版（適用できます）', 'running'], older: ['古い版（適用できません）', 'cancelled'], bad: ['以前の更新で失敗した版（適用できません）', 'error'], other: ['現在の版とは別系統（適用できません）', 'cancelled'] };
+        let newestMarked = false;
+        for (const d of s.prepared_details) {
+          const c = el('div', 'card'), top = el('div', 'row');
+          let [text, cls] = label[d.relation] || label.other;
+          if (d.relation === 'newer' && !newestMarked) { text = '最新（適用できます）'; newestMarked = true; }
+          top.append(el('span', 'badge ' + cls, text), el('strong', 'grow', (d.pr ? `PR #${d.pr}: ` : '') + (d.title || '（内容を取得できませんでした）')));
+          c.appendChild(top);
+          const st = Object.entries(d.steps || {}).map(([k, v]) => `${({ selfcheck: '自己検査', tests: 'テスト', exe: 'EXE', bootstrap: '取り込み' }[k] || k)}: ${({ passed: '通過', built: 'ビルド済み', failed: '失敗', not_built: '未ビルド', imported: '取り込み済み', skipped: 'スキップ' }[v] || v)}`).join(' / ');
+          c.appendChild(el('div', 'mute', `${d.date || '-'} ・ ID ${d.name}${d.is_previous ? ' ・ 直前の版' : ''}${st ? ' ・ ' + st : ''}`));
+          if (d.relation === 'newer') {
+            const b = el('button', '', '適用（承認を作成）'); b.disabled = !s.supervised;
+            b.onclick = () => act(async () => { await post('/api/update/apply', { sha: d.name }); alert('承認要求を作りました。「承認」タブで内容を確認して承認してください。'); show('approvals'); });
+            c.appendChild(b);
+          }
+          box.appendChild(c);
         }
-        box.appendChild(c);
       }
       v.replaceChildren(box);
     };
@@ -184,7 +201,8 @@ const views = {
       for (const a of approvals) {
         const c = el('div', 'card'), top = el('div', 'row');
         top.append(badge(a.status), el('strong', 'grow', a.tool), el('span', 'mute', `ID ${a.id}`));
-        c.append(top, el('p', '', a.summary), el('div', 'mute', '引数'), el('pre', '', JSON.stringify(a.args, null, 2)),
+        const sum = el('p', '', a.summary); sum.style.whiteSpace = 'pre-wrap';   // 要約の改行（内容・版・差分など）をそのまま見せる
+        c.append(top, sum, el('div', 'mute', '引数'), el('pre', '', JSON.stringify(a.args, null, 2)),
                  el('div', 'mute', `操作ハッシュ ${a.hash.slice(0, 16)}…（承認時にこのハッシュと一致した操作だけが実行されます）`));
         if (a.status === 'pending') {
           const left = Math.max(0, Math.round(a.expires_at - Date.now() / 1000));

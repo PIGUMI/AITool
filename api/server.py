@@ -198,8 +198,7 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
                     # apply / rollback は R2。画面のボタンも承認要求を作るだけで、実行は承認画面で承認されたときだけ
                     if action == "apply":
                         sha = str(body.get("sha", ""))
-                        ap = agent.approvals.request("-", "update_apply", {"sha": sha},
-                                                     f"Faraway を {up.version()[:12]} → {sha[:12]} に更新して再起動します（テスト・自己検査は通過済み。失敗時は自動で元に戻ります）")
+                        ap = agent.approvals.request("-", "update_apply", {"sha": sha}, up.apply_summary(sha))
                     else:
                         ap = agent.approvals.request("-", "update_rollback", {}, "Faraway を直前の版に戻して再起動します")
                     return self._json(200, {"approval_id": ap["id"], "hash": ap["hash"], "summary": ap["summary"]})
