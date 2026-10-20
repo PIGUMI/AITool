@@ -39,7 +39,7 @@ def remote(tmp_path: Path) -> Path:
 def make(tmp_path, remote, **extra):
     repo = {"name": "proj", "remote_url": str(remote), "base_ref": "origin/main",
             "test": [sys.executable, "-c", "import sys; sys.exit(1)"], "build": [sys.executable, "-c", "print('built')"], **extra}
-    cfg = {"work_dir": str(tmp_path / "work"), "repos": [repo], "max_fix_attempts": 5}
+    cfg = {"work_dir": str(tmp_path / "work"), "repos": [repo], "max_fix_attempts": 5, "require_tests_before_commit": False}
     d = Dev(cfg, free_mb=lambda: 99999)
     return d, {t.name: t for t in build_tools(cfg, d)}
 
@@ -91,7 +91,7 @@ def test_write_old_must_match_exactly_once(env):
     _, tools, wid, *_ = env
     tools["dev_write"].handler({"worktree": wid, "path": "dup.py", "content": "a\na\n"})
     assert "2 箇所" in tools["dev_write"].handler({"worktree": wid, "path": "dup.py", "old": "a", "new": "b"})["reason"]
-    assert "0 箇所" in tools["dev_write"].handler({"worktree": wid, "path": "dup.py", "old": "zzz", "new": "b"})["reason"]
+    assert "見つかりません" in tools["dev_write"].handler({"worktree": wid, "path": "dup.py", "old": "zzz", "new": "b"})["reason"]
 
 
 @pytest.mark.parametrize("path", ["../escape.py", "..\\escape.py", "/etc/passwd", "C:/Windows/x.py", ".git/config", "a/.git/hooks/x",
@@ -262,3 +262,66 @@ def test_helpers():
     assert is_secret_path(".env") and is_secret_path("a/secrets/x") and is_secret_path("k.pem") and not is_secret_path("src/main.py")
     with pytest.raises(Exception):
         safe_path(Path("."), "../x")
+
+
+
+# --- 壊れた変更を先へ進めない（実機の 9B が、引用符の閉じ忘れで構文エラーのファイルを作った）---
+def make_gate(tmp_path, remote, test_cmd):
+    repo = {"name": "proj", "remote_url": str(remote), "base_ref": "origin/main", "test": test_cmd}
+    cfg = {"work_dir": str(tmp_path / "work"), "repos": [repo]}
+    d = Dev(cfg, free_mb=lambda: 99999)
+    tools = {t.name: t for t in build_tools(cfg, d)}
+    return tools, tools["dev_start"].handler({"repo": "proj", "slug": "gate-test"})["worktree"], tmp_path / "work" / "worktrees" / "proj" / "gate-test"
+
+
+@pytest.mark.parametrize("path,bad,good", [
+    ("app.py", 'WEEKDAYS = "月火水\n', "X = 1\n"),
+    ("data.json", "{'a': 1,}", '{"a": 1}'),
+    ("conf.toml", "a = = 1", "a = 1\n"),
+])
+def test_broken_python_json_toml_are_not_written(tmp_path, remote, path, bad, good):
+    tools, wid, wt = make_gate(tmp_path, remote, [sys.executable, "-c", "pass"])
+    before = (wt / path).read_text(encoding="utf-8") if (wt / path).exists() else None
+    out = tools["dev_write"].handler({"worktree": wid, "path": path, "content": bad})
+    assert out["error"] == "dev_error" and ("構文エラー" in out["reason"] or "形式が不正" in out["reason"])
+    assert ((wt / path).read_text(encoding="utf-8") if (wt / path).exists() else None) == before     # ファイルは変わらない
+    assert "bytes" in tools["dev_write"].handler({"worktree": wid, "path": path, "content": good})   # 正しい内容なら書ける
+
+
+def test_syntax_error_is_reported_with_line_number_for_str_replace(tmp_path, remote):
+    tools, wid, wt = make_gate(tmp_path, remote, [sys.executable, "-c", "pass"])
+    out = tools["dev_write"].handler({"worktree": wid, "path": "app.py", "old": "print('v1')", "new": "print('v1"})   # 引用符を消す
+    assert out["error"] == "dev_error" and "行目" in out["reason"] and (wt / "app.py").read_text() == "print('v1')\n"
+
+
+def test_non_code_files_are_not_checked(tmp_path, remote):
+    tools, wid, _ = make_gate(tmp_path, remote, [sys.executable, "-c", "pass"])
+    assert "bytes" in tools["dev_write"].handler({"worktree": wid, "path": "notes.md", "content": "「閉じない\n"})
+
+
+def test_commit_requires_a_passing_test_after_the_last_change(tmp_path, remote):
+    tools, wid, wt = make_gate(tmp_path, remote, [sys.executable, "-c", "pass"])
+    tools["dev_write"].handler({"worktree": wid, "path": "app.py", "old": "v1", "new": "v2"})
+    out = tools["dev_commit"].handler({"worktree": wid, "message": "v2 にする"})
+    assert out["error"] == "dev_error" and "テストが通っていません" in out["reason"]
+    assert git(wt, "log", "--oneline").count("\n") == 1                                   # 初期コミットのみ（新しいコミットはできていない）
+    assert tools["dev_run"].handler({"worktree": wid, "kind": "test"})["passed"]
+    assert tools["dev_commit"].handler({"worktree": wid, "message": "v2 にする"})["committed"] is True
+    tools["dev_write"].handler({"worktree": wid, "path": "app.py", "old": "v2", "new": "v3"})   # また変更したら、もう一度テストが要る
+    assert tools["dev_commit"].handler({"worktree": wid, "message": "v3"})["error"] == "dev_error"
+
+
+def test_failing_tests_do_not_unlock_the_commit(tmp_path, remote):
+    tools, wid, _ = make_gate(tmp_path, remote, [sys.executable, "-c", "import sys; sys.exit(1)"])
+    tools["dev_write"].handler({"worktree": wid, "path": "app.py", "old": "v1", "new": "v2"})
+    assert tools["dev_run"].handler({"worktree": wid, "kind": "test"})["passed"] is False
+    assert tools["dev_commit"].handler({"worktree": wid, "message": "壊れたまま"})["error"] == "dev_error"
+
+
+def test_build_does_not_unlock_the_commit_and_repos_without_tests_are_not_gated(tmp_path, remote):
+    tools, wid, _ = make_gate(tmp_path, remote, [sys.executable, "-c", "pass"])
+    tools["dev_write"].handler({"worktree": wid, "path": "app.py", "old": "v1", "new": "v2"})
+    assert tools["dev_commit"].handler({"worktree": wid, "message": "x"})["error"] == "dev_error"
+    tools2, wid2, _ = make_gate(tmp_path / "second", remote, [])                          # テストが設定されていないリポジトリは、従来どおり
+    tools2["dev_write"].handler({"worktree": wid2, "path": "app.py", "old": "v1", "new": "v2"})
+    assert tools2["dev_commit"].handler({"worktree": wid2, "message": "x"})["committed"] is True

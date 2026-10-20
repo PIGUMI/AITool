@@ -8,11 +8,13 @@
 """
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import subprocess
 import threading
+import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -40,6 +42,34 @@ class DevError(Exception):
 
 GITHUB_REMOTE = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 SECRET_LIKE = re.compile(r"(bearer\s+\S+|(token|password|passwd|secret|api[_-]?key)\s*[=:]\s*\S+|\bgh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|[A-Za-z0-9_\-]{40,})", re.I)
+
+
+def _nearest_line_hint(content: str, old: str) -> str:
+    """old の最初の行に一番近い行を教える（手がかりのない失敗を、同じ引数で繰り返させないため）。"""
+    first = next((l.strip() for l in old.splitlines() if l.strip()), "")
+    lines = content.splitlines()
+    near = difflib.get_close_matches(first, [l.strip() for l in lines], n=1, cutoff=0.5) if first else []
+    if not near:
+        return "近い行も見つかりませんでした（ファイルが想定と違うかもしれません）。"
+    n = next(i for i, l in enumerate(lines, 1) if l.strip() == near[0])
+    return f"最も近い行は {n} 行目: 「{lines[n - 1][:120]}」です。"
+
+
+def check_syntax(rel: str, text: str) -> None:
+    """Python / JSON / TOML は、書き込む前に構文を検査する。壊れていれば DevError（ファイルは書かれない）。"""
+    suffix = Path(rel).suffix.lower()
+    try:
+        if suffix == ".py":
+            compile(text, rel, "exec")
+        elif suffix == ".json":
+            json.loads(text)
+        elif suffix == ".toml":
+            tomllib.loads(text)
+    except SyntaxError as e:
+        raise DevError(f"構文エラーのため書き込みませんでした（{rel} の {e.lineno} 行目: {e.msg}）。"
+                       "引用符・括弧の閉じ忘れなどを確認して、書き直してください") from None
+    except (ValueError, tomllib.TOMLDecodeError) as e:
+        raise DevError(f"形式が不正なため書き込みませんでした（{rel}: {str(e)[:120]}）。書き直してください") from None
 
 
 def looks_secret(text: str) -> bool:
@@ -123,6 +153,8 @@ class Dev:
         self.min_free = int(cfg.get("min_free_memory_mb", 1500))
         self.free_mb = free_mb or self._free_mb
         self._fails: dict[str, int] = {}
+        self._dirty: dict[str, bool] = {}   # 書き込みのあと、まだテストが通っていない worktree
+        self.require_tests = bool(cfg.get("require_tests_before_commit", True))
         self._lock = threading.Lock()
 
     @staticmethod
@@ -180,11 +212,16 @@ class Dev:
             if old is None or new is None or not full.is_file():
                 raise DevError("content か、既存ファイルに対する old/new を指定してください")
             cur = full.read_text(encoding="utf-8")
+            if cur.count(old) == 0:
+                raise DevError("old がファイルの中に見つかりません。" + _nearest_line_hint(cur, old) +
+                               "dev_read で現在の内容を確かめ、old を実際の文字列（空白・改行も含めて）に合わせるか、content で全文を書き直してください")
             if cur.count(old) != 1:
                 raise DevError(f"old が {cur.count(old)} 箇所に一致しました（ちょうど1箇所になるよう範囲を調整してください）")
             text = cur.replace(old, new)
+        check_syntax(rel, text)   # 壊れたファイルは書かない（書き込み前に、その場でモデルへ返す）
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(text, encoding="utf-8", newline="")
+        self._dirty[wid] = True
         return {"path": rel, "bytes": len(text.encode("utf-8"))}
 
     def run_cmd(self, wid: str, kind: str) -> dict[str, Any]:
@@ -211,6 +248,8 @@ class Dev:
         with self._lock:
             self._fails[wid] = 0 if code == 0 else fails + 1
             n = self._fails[wid]
+            if kind == "test" and code == 0:
+                self._dirty[wid] = False   # 変更のあとでテストが通った
         return {"kind": kind, "exit_code": code, "passed": code == 0, "failures_so_far": n, "attempts_left": max(0, self.max_fail - n),
                 "output_tail": out[-OUT_TAIL:]}
 
@@ -219,6 +258,9 @@ class Dev:
         branch = self.branch(root)
         if not branch.startswith("feature/") or branch in PROTECTED:
             raise DevError("feature/* ブランチ以外ではコミットしません")
+        if self.require_tests and self.repos.get(wid.split("/")[0], {}).get("test") and self._dirty.get(wid):
+            raise DevError("変更を加えたあと、テストが通っていません。dev_run の test を実行し、通ってからコミットしてください"
+                           "（失敗したら原因を直します。直せなければ、止まって報告します）")
         self.git(root, "add", "-A")
         staged = [x for x in self.git(root, "diff", "--cached", "--name-only").splitlines() if x]
         bad = [x for x in staged if is_secret_path(x)]
