@@ -384,7 +384,7 @@ def test_apply_refuses_older_or_unrelated_versions(world):
     assert world["state"]["restarts"] == 0 and (world["inst"] / "current.txt").read_text() == v2[:12]
     world["state"]["version"] = "unknown"                                     # 動いている版が分からない場合も、拒否する（安全側）
     with pytest.raises(UpdateError, match="子孫"):
-        up.apply(v2[:12] + "0" * 28 if False else world["v1"])
+        up.apply(world["v1"])
 
 
 def test_forward_update_still_works_after_guards(world):
