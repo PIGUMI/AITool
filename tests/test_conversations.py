@@ -193,3 +193,36 @@ def test_ui_persists_chat_in_the_window_only(srv):
     assert "ev.type === 'approval') add('err'" in html                                         # 承認の案内も復元できる形で追加している
     assert "回答の途中で画面を移動した" in html                                                    # 途中で移動した場合の案内
     assert "msgs.slice(-80)" in html                                                           # 保存は直近80件まで
+
+
+# --- 振り分け: 「アップデートで〜できるようにして」は開発の依頼（実機の画面で update_check に誤って振り分けられた）---
+@pytest.mark.parametrize("text", [
+    "自己アップデートでエクセルデータを作成できるようにしてください",
+    "Faraway にエクセルを読む機能を追加して",
+    "このアシスタントのコードを修正して、ログを増やして",
+    "ツールを追加してほしい",
+])
+def test_feature_requests_go_to_the_development_flow_not_update_check(text):
+    f = forced(text)
+    assert {"dev_start", "search", "repo_read"} <= f
+    assert "update_check" not in f and "device_info" not in f      # 更新の確認や端末のファイル確認に振り分けない
+
+
+@pytest.mark.parametrize("text", ["Faraway を更新できる？", "アップデートはありますか？", "最新版にして", "今のバージョンは？", "自己更新の状態を教えて"])
+def test_real_update_questions_still_check_for_updates(text):
+    f = forced(text)
+    assert "update_check" in f and "dev_start" not in f
+
+
+@pytest.mark.parametrize("text", ["予定を追加して", "こんにちは", "GPUの状態は？", "エクセルデータありますか？", "Documents のエクセルファイルの一覧を見せて"])
+def test_ordinary_requests_do_not_trigger_development(text):
+    assert "dev_start" not in forced(text)
+
+
+def test_device_questions_still_route_to_device_tools():
+    assert {"device_info", "device_list"} <= forced("エクセルデータありますか？")
+    assert {"device_info", "device_list"} <= forced("Documents のエクセルファイルの一覧を見せて")
+
+
+def test_prompt_separates_feature_requests_from_updates():
+    assert "update_check ではなく、開発の手順で進めます" in SYSTEM_PROMPT and "機能そのものは作りません" in SYSTEM_PROMPT
