@@ -37,7 +37,7 @@ def build_tools(up: Updater) -> list[ToolSpec]:
                  obj({"sha": sha}, []), Level.R1, guard(lambda a: up.prepare(a.get("sha"))), egress=True),
         ToolSpec("update_apply", "検証済みの版に切り替えて Faraway を再起動する（承認が必要。起動に失敗すれば自動で前の版に戻る）。",
                  obj({"sha": sha}, ["sha"]), Level.R2, guard(lambda a: up.apply(a["sha"])),
-                 summarizer=lambda a: f"Faraway を {up.version()[:12]} → {str(a.get('sha', ''))[:12]} に更新して再起動します（テスト・自己検査は通過済み。失敗時は自動で元に戻ります）"),
+                 summarizer=lambda a: up.apply_summary(str(a.get("sha", "")))),
         ToolSpec("update_rollback", "直前の版に戻して Faraway を再起動する（承認が必要）。", obj({}, []), Level.R2, guard(lambda a: up.rollback()),
                  summarizer=lambda a: "Faraway を直前の版に戻して再起動します"),
     ]

@@ -52,6 +52,9 @@ class FakeUpdater:
             raise UpdateError("検証されていません")
         return {"applied": sha[:12], "restart_requested": True}
 
+    def apply_summary(self, sha):
+        return f"Faraway を更新して再起動します。\n内容: PR #9: テスト用の更新\n版: {self.version()[:12]} → {sha[:12]}（自動で元に戻ります）"
+
     def rollback(self):
         self.calls.append("rollback")
         return {"rolled_back_to": "x", "restart_requested": True}
