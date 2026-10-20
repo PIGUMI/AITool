@@ -1,0 +1,26 @@
+# 秘匿情報（最初に除外する）
+secrets/
+.assistant/
+.env
+.env.*
+*.key
+*.pem
+api_tokens.json
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# ログ・生成物
+logs/
+audit/
+build/
+dist/
+# アプリ（Android Studio / Gradle の生成物・ローカル設定・署名）、証明書
+.gradle/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+*.crt

@@ -1,0 +1,72 @@
+﻿<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1419">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>Faraway</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1a2129; --text:#e6edf3; --mute:#8b98a5; --accent:#4cc2ff; --user:#24313d; --err:#ff7b72; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --mute:#656d76; --accent:#0969da; --user:#ddf4ff; --err:#cf222e; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 system-ui,sans-serif; display:flex; flex-direction:column; height:100dvh; }
+  header { padding:10px 16px; background:var(--panel); display:flex; justify-content:space-between; align-items:center; }
+  header button { background:none; border:1px solid var(--mute); color:var(--mute); border-radius:6px; padding:4px 10px; }
+  #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:min(46rem,92%); padding:10px 14px; border-radius:12px; white-space:pre-wrap; overflow-wrap:anywhere; background:var(--panel); }
+  .msg.user { align-self:flex-end; background:var(--user); }
+  .msg.tool { font-size:13px; color:var(--mute); background:none; padding:0 14px; }
+  .msg.err { color:var(--err); }
+  form { display:flex; gap:8px; padding:12px 16px; background:var(--panel); }
+  textarea { flex:1; resize:none; background:var(--bg); color:var(--text); border:1px solid var(--mute); border-radius:8px; padding:8px; font:inherit; }
+  form button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:0 18px; font:inherit; }
+  button:disabled { opacity:.5; }
+</style>
+</head>
+<body>
+<header><strong>Faraway</strong><span><a href="/admin" style="color:var(--accent);margin-right:12px">管理</a><button id="tok" type="button">トークン設定</button></span></header>
+<div id="log" aria-live="polite"></div>
+<form id="f"><textarea id="q" rows="2" placeholder="依頼を入力（例：GPUの状態は？）"></textarea><button id="send">送信</button></form>
+<script>
+const log = document.getElementById('log'), q = document.getElementById('q'), send = document.getElementById('send');
+const get = () => { try { return localStorage.getItem('assistant_token') || ''; } catch { return ''; } };
+const set = v => { try { localStorage.setItem('assistant_token', v); } catch {} };
+// ペアリングURL（…/#token=xxxx）から開いたら、トークンを保存してアドレス欄から消す（#以降はサーバーに送られない）
+(() => { const m = location.hash.match(/token=([^&]+)/); if (m) { set(decodeURIComponent(m[1])); history.replaceState(null, '', location.pathname); } })();
+// アプリとしてインストールできるようにする（HTTPS のときだけ有効。HTTP では何も起きない）
+try { if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js'); } catch (e) {}
+function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
+document.getElementById('tok').onclick = () => { const v = prompt('APIトークンを入力（この端末のブラウザにだけ保存されます）', ''); if (v !== null) set(v.trim()); };
+document.getElementById('f').onsubmit = async e => {
+  e.preventDefault();
+  const text = q.value.trim(); if (!text) return;
+  if (!get()) { add('err', '先に「トークン設定」でAPIトークンを入力してください。'); return; }
+  add('user', text); q.value = ''; send.disabled = true;
+  try {
+    const r = await fetch('/api/chat', { method:'POST', headers:{ 'Authorization':'Bearer ' + get(), 'Content-Type':'application/json' }, body: JSON.stringify({ request:text }) });
+    if (r.status === 401) { add('err', '認証に失敗しました。トークンを確認してください。'); return; }
+    if (!r.ok) { add('err', 'エラー: HTTP ' + r.status); return; }
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream:true });
+      let i; while ((i = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 2);
+        if (!line.startsWith('data: ')) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === 'tool') add('tool', `ツール ${ev.tool}: ${ev.status}`);
+        else if (ev.type === 'approval') { const d = add('err', `承認が必要です: ${ev.summary}（まだ実行していません）`); const a = document.createElement('a'); a.href = '/admin'; a.textContent = ' 承認画面を開く'; a.style.color = 'var(--accent)'; d.appendChild(a); }
+        else if (ev.type === 'message') add('bot', ev.text);
+        else if (ev.type === 'error') add('err', ev.text);
+      }
+    }
+  } catch (err) { add('err', '接続できませんでした。'); }
+  finally { send.disabled = false; q.focus(); }
+};
+q.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) document.getElementById('f').requestSubmit(); });
+</script>
+</body>
+</html>

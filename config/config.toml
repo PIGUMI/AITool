@@ -1,0 +1,191 @@
+# Faraway 設定。シークレット（APIキー等）はここに書かない。
+# シークレットは %USERPROFILE%\.assistant\secrets\ から読む。
+
+[llm]
+# 先に書いた接続先から順に試す（LAN → Tailscale）
+endpoints = [
+  "http://192.168.0.13:8080/v1",
+  "http://100.84.113.46:8080/v1",
+]
+api_key_file = "llama_api_key.txt"
+model = "qwen3.5-9b"          # 読み込まれているモデルは1つだけなので値は何でもよい
+timeout_seconds = 120
+
+[llm.request]
+# chat/completions にそのまま足す項目。Qwen3.5 の思考出力を切る設定（空の回答になる問題の対策。実機で効果を確認する）
+chat_template_kwargs = { enable_thinking = false }
+
+[agent]
+max_tool_calls = 20           # 1回の依頼で実行できるツール呼び出しの上限
+max_llm_turns = 25            # モデルへの問い合わせ回数の上限（無限ループ防止）
+approval_ttl_seconds = 600    # R2 の承認要求の有効期限（10分）
+
+# 9B が記憶や推測で答えてしまうのを防ぐ。依頼が pattern（正規表現）に一致したら、最初の1回は tools のどれかの呼び出しを強制する。
+[[agent.force_tools]]
+pattern = "出典|調べて|調べ物|最新|ニュース|ウェブ|Web|URL|https?://"
+tools = ["web_search", "web_fetch"]
+
+[[agent.force_tools]]
+pattern = "リポジトリ|実装|ソース|コード|関数|クラス|コミット|履歴|ブランチ|どこ.*(書|定義|実装)"
+tools = ["search", "repo_read", "git_info"]
+
+[[agent.force_tools]]
+pattern = "このPC|この端末|スマホの|端末の|PCの(ファイル|フォルダ)|ドキュメント|デスクトップ|ダウンロードフォルダ|フォルダの中"
+tools = ["device_info", "device_list", "device_read"]
+
+[[agent.force_tools]]
+pattern = "アップデート|自己更新|最新版|Faraway.{0,6}更新|バージョン"
+tools = ["update_check"]
+
+[[agent.force_tools]]
+pattern = "今日|今何時|現在時刻|何曜日|日付|今の時間"
+tools = ["current_time"]
+
+[[agent.force_tools]]
+pattern = "GPU|VRAM|CPU|メモリ|ディスク|空き容量|サーバーの状態|PCの状態"
+tools = ["host_status"]
+
+[[agent.force_tools]]
+pattern = "ping|疎通|生きてる|起動してる|LAN"
+tools = ["network"]
+
+[slots]
+# llama.cpp は 2 スロット。対話を1本、夜間バッチを1本に分ける。
+interactive = 1
+batch = 1
+
+[audit]
+directory = "logs/audit"
+
+[api]
+hosts = ["127.0.0.1", "192.168.0.13", "100.84.113.46"]
+port = 8765
+# HTTPS（Android で「アプリとしてインストール」するのに必要）。Tailscale の証明書を使う場合は docs/app-setup.md を参照。
+# 両方を設定すると tls_hosts のアドレス（省略すると hosts 全て）が HTTPS になる。例:
+# tls_cert = "C:\\Users\\user\\.assistant\\secrets\\faraway.crt"
+# tls_key = "C:\\Users\\user\\.assistant\\secrets\\faraway.key"
+# tls_hosts = ["100.84.113.46"]
+tokens_file = "api_tokens.json"   # secrets ディレクトリ内。端末ごとのトークンのハッシュを保存
+
+[host_status]
+disk_paths = ["C:\\"]
+log_files = []                # 直近エラーを見るログファイル
+log_tail_lines = 200
+# GPU取得コマンド（JSONを標準出力に出すもの）。未設定なら「取得不可」と答える。
+# 期待する形: {"temperature_c": 55, "utilization_percent": 30, "vram_used_mb": 9000, "vram_total_mb": 16384}
+gpu_command = []
+# gpu_command が空のときは Windows の性能カウンターで VRAM使用量・使用率を取る（温度は取得不可）。VRAM総量はカードの仕様値（RX 9060 XT = 16GB）。
+gpu_vram_total_mb = 16384
+
+[search]
+# リポジトリ検索（R0）。登録したリポジトリだけを対象に、git の読み取り専用コマンドで索引する（作業ツリーには触れない）。
+# index_path を省略すると %USERPROFILE%\.assistant\index\search.sqlite3
+max_file_bytes = 300000
+history_commits = 300         # 索引するコミットメッセージの件数（最新から）
+
+[[search.repos]]
+name = "faraway"
+path = "C:\\Users\\user\\Documents\\AITool"
+ref = "HEAD"
+
+[update]
+# 自己更新（docs/self-update.md）。更新元は設定で固定し、モデルは変更できない。反映されるのは main にマージ済みのコードだけ。
+# スーパーバイザー（python supervisor.py）経由で起動したときだけ、適用（再起動）できる。直接起動したサーバーは確認・準備まで。
+remote_url = "https://github.com/PIGUMI/AITool.git"   # リポジトリ名変更後は .../Faraway.git でも可（旧URLは自動転送される）
+branch = "main"
+auto_check_hours = 6              # 定期的に更新を確認する（確認だけ。適用は承認が必要）。0 で無効
+require_tests = true              # 準備でテストを通す（通らない版は適用しない）
+test_command = ["python", "-m", "pytest", "-q", "-x"]
+test_timeout_seconds = 900
+keep_releases = 3                 # 残す古いリリースの数（現在・直前の版は常に残す）
+build_exe = true                  # Windows では、準備のときに Faraway.exe もビルドする（失敗しても適用は止めない）
+
+[batch]
+# 夜間バッチ（ジョブキュー）。when="night" のジョブは、この時間帯の中だけ実行する（時間帯は仮。確認待ち）。
+# 対話スロットが使用中のあいだは、when="now" のジョブも含めて実行を延期する。
+enabled = true
+window_start = "02:00"
+window_end = "06:00"
+
+[dev]
+# 開発作業（R0〜R2）。専用の clone と worktree の中だけで作業し、常駐PCのメインのチェックアウトには触れない。
+# work_dir を省略すると %USERPROFILE%\.assistant\work
+max_fix_attempts = 5              # ビルド/テストの失敗がこの回数に達したら止まって報告する
+command_timeout_seconds = 600
+min_free_memory_mb = 1500         # 空きメモリがこれを下回るときはビルド/テストを始めない（仮の値。実測で決める）
+git_name = "Assistant"
+git_email = "assistant@localhost"
+
+[[dev.repos]]
+name = "faraway"
+remote_url = "https://github.com/PIGUMI/AITool.git"
+base_ref = "origin/main"          # main への直接 push はしない。PR 経由
+build = []
+test = ["python", "-m", "pytest", "-q"]
+
+[calendar]
+# Googleカレンダー（読み取り専用）。認証情報が %USERPROFILE%\.assistant\secrets\ に無ければツールは登録されない。
+# 設定手順は docs/setup-calendar.md。
+calendar_id = "primary"
+work_start = "09:00"          # 空き時間検索の作業時間帯
+work_end = "18:00"
+
+[notify]
+# ntfy への通知（R1）。url と topic が両方あるときだけ有効。通知先は LAN/ローカル/Tailscale のサーバーに限る。
+url = ""                      # 例: "http://192.168.0.13:2586"（サーバー用PCで ntfy を動かす。docs/setup-ntfy.md）
+topic = ""                    # 推測されにくい名前にする（例: "assistant-" + ランダム文字列）
+timeout_seconds = 5
+
+[web_search]
+# 検索元を順に試し、結果が出た最初のものを使う。"searxng"（自前ホスト。推奨）/ "wikipedia"（公式API・キー不要）
+# "duckduckgo" はボット対策で HTTP 202 を返し使えなかったため既定から外している（回避はしない）。
+# 検索語は外部に出る。秘匿情報を含めないこと。
+providers = ["searxng", "wikipedia"]
+wikipedia_langs = ["ja", "en"]
+searxng_url = ""              # 例: "http://192.168.0.13:8888"（SearXNG の settings で formats に json を追加しておく）
+timeout_seconds = 10
+
+[web_render]
+# JavaScriptで描画されるページを、ヘッドレスの Edge/Chrome で描画して読む（R0・読み取りのみ）。
+# 接続先は取得対象のホストだけに固定され、LAN・ローカル・Tailscale には届かない。ブラウザが見つからなければ無効。
+# browser_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"   # 省略すると自動検出
+timeout_seconds = 30
+script_wait_ms = 6000             # 描画後にスクリプトの実行を待つ時間（仮想時間）
+max_chars = 8000
+min_free_memory_mb = 1000         # 空きメモリがこれを下回るときは起動しない（仮の値）
+
+[web]
+# web_fetch（R0, GETのみ）。LAN・ローカル・Tailscaleのアドレスは設定に関わらず常に拒否する。
+timeout_seconds = 10
+max_bytes = 1000000           # 取得する本文の上限
+max_chars = 8000              # モデルに返すテキストの上限
+max_redirects = 4
+user_agent = "personal-assistant/0.1"
+
+[network]
+timeout_seconds = 2
+# 対象はここに列挙した機器だけ。LAN全体の走査はしない。
+[[network.devices]]
+name = "resident-pc"
+address = "192.168.0.13"
+enabled = true
+ports = [8080]
+web = "http://192.168.0.13:8080/health"
+
+[[network.devices]]
+name = "raspberry-pi-5"        # 現在は未運用のため無効
+address = ""
+enabled = false
+ports = []
+
+[[network.devices]]
+name = "tl-sg105e"             # アドレスを設定してから有効にする
+address = ""
+enabled = false
+ports = []
+
+[[network.devices]]
+name = "dev-pc"
+address = "192.168.0.4"
+enabled = true
+ports = []

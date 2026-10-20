@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1419">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>Faraway 管理</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1a2129; --text:#e6edf3; --mute:#8b98a5; --accent:#4cc2ff; --line:#2b3641; --ok:#3fb950; --warn:#d29922; --err:#ff7b72; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --text:#1f2328; --mute:#656d76; --accent:#0969da; --line:#d0d7de; --ok:#1a7f37; --warn:#9a6700; --err:#cf222e; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+  header { position:sticky; top:0; z-index:2; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header strong { margin-right:auto; }
+  a, button { color:var(--accent); }
+  button { background:none; border:1px solid var(--line); border-radius:6px; padding:4px 10px; font:inherit; cursor:pointer; }
+  button.danger { color:var(--err); border-color:var(--err); }
+  nav { display:flex; gap:4px; padding:8px 16px 0; overflow-x:auto; border-bottom:1px solid var(--line); }
+  nav button { border:0; border-bottom:2px solid transparent; border-radius:0; color:var(--mute); padding:8px 12px; white-space:nowrap; }
+  nav button.on { color:var(--text); border-bottom-color:var(--accent); }
+  main { padding:16px; max-width:64rem; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; overflow-wrap:anywhere; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .row .grow { flex:1; min-width:10rem; }
+  .mute { color:var(--mute); font-size:13px; }
+  .badge { display:inline-block; padding:0 8px; border-radius:99px; border:1px solid var(--line); font-size:12px; }
+  .running { color:var(--warn); border-color:var(--warn); } .done, .ok { color:var(--ok); border-color:var(--ok); }
+  .cancelled, .error, .llm_error, .empty_response, .tool_limit, .turn_limit, .denied { color:var(--err); border-color:var(--err); }
+  input, select { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; max-width:100%; }
+  pre { margin:6px 0 0; padding:8px; background:var(--bg); border-radius:6px; overflow-x:auto; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  table { border-collapse:collapse; width:100%; } td, th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:2px 12px; }
+</style>
+</head>
+<body>
+<header><strong>Faraway 管理</strong><a href="/">チャットへ</a><button id="tok" type="button">トークン設定</button></header>
+<nav id="tabs"></nav>
+<main id="view" aria-live="polite"></main>
+<script>
+const $ = id => document.getElementById(id);
+const store = { get: () => { try { return localStorage.getItem('assistant_token') || ''; } catch { return ''; } },
+                set: v => { try { localStorage.setItem('assistant_token', v); } catch {} } };
+(() => { const m = location.hash.match(/token=([^&]+)/); if (m) { store.set(decodeURIComponent(m[1])); history.replaceState(null, '', location.pathname); } })();
+$('tok').onclick = () => { const v = prompt('APIトークンを入力（この端末のブラウザにだけ保存されます）', ''); if (v !== null) { store.set(v.trim()); show(current); } };
+
+// 表示する文字列はすべて textContent で入れる（ログやモデル出力に含まれるHTMLを実行しない）
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function badge(text) { return el('span', 'badge ' + text, text); }
+async function api(path, method = 'GET') {
+  const r = await fetch(path, { method, headers: { Authorization: 'Bearer ' + store.get() } });
+  if (r.status === 401) throw new Error('認証に失敗しました。「トークン設定」を確認してください。');
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { Authorization: 'Bearer ' + store.get(), 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
+const fmt = t => t ? new Date(t * 1000).toLocaleString('ja-JP') : '-';
+const dur = r => r.finished_at ? ((r.finished_at - r.started_at).toFixed(1) + '秒') : '実行中';
+
+const tabs = { runs: '作業', jobs: 'ジョブ', approvals: '承認', audit: '監査ログ', dashboard: 'ダッシュボード', tools: 'ツール', devices: '端末', update: '更新' };
+// 承認待ちの件数をタブに出す（どのタブにいても気づけるように）
+async function badge_() { try { const { approvals } = await api('/api/approvals'); const n = approvals.filter(a => a.status === 'pending').length;
+  for (const b of $('tabs').children) if (b.dataset.k === 'approvals') b.textContent = n ? `承認 (${n})` : '承認'; } catch {} }
+setInterval(badge_, 5000);
+let current = 'runs', timer = null;
+for (const [k, v] of Object.entries(tabs)) { const b = el('button', '', v); b.dataset.k = k; b.onclick = () => show(k); $('tabs').appendChild(b); }
+
+async function show(k) {
+  current = k; clearInterval(timer);
+  for (const b of $('tabs').children) b.classList.toggle('on', b.dataset.k === k);
+  const v = $('view'); v.replaceChildren(el('p', 'mute', '読み込み中…'));
+  try { await views[k](v); } catch (e) { v.replaceChildren(el('p', 'mute', String(e.message || e))); }
+}
+
+const views = {
+  async runs(v) {
+    const draw = async () => {
+      const { runs } = await api('/api/runs');
+      const box = el('div');
+      box.appendChild(el('p', 'mute', `実行中 ${runs.filter(r => r.status === 'running').length} 件 / 直近 ${runs.length} 件（3秒ごとに更新。サーバー再起動で消えます。履歴は監査ログで確認できます）`));
+      if (!runs.length) box.appendChild(el('p', 'mute', 'まだ作業はありません。'));
+      for (const r of runs) {
+        const c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(r.status), el('strong', 'grow', r.request), el('span', 'mute', `${r.slot} · ${r.device} · ツール${r.tool_calls}回 · ${dur(r)}`));
+        if (r.status === 'running') { const b = el('button', 'danger', '中止'); b.onclick = async e => { e.stopPropagation(); await api(`/api/runs/${r.request_id}/cancel`, 'POST'); draw(); }; top.appendChild(b); }
+        const more = el('div'); more.hidden = true;
+        c.append(top, el('div', 'mute', `${fmt(r.started_at)} · ID ${r.request_id}`), more);
+        top.onclick = async () => {
+          more.hidden = !more.hidden; if (more.hidden || more.dataset.loaded) return;
+          const d = await api('/api/runs/' + r.request_id); more.dataset.loaded = '1';
+          if (d.run && d.run.answer) more.append(el('div', 'mute', '回答'), el('pre', '', d.run.answer));
+          more.append(el('div', 'mute', '監査ログ'));
+          for (const a of d.audit) { const line = el('div', 'row'); line.append(badge(a.status || a.event), el('span', 'grow', [a.event, a.tool, a.level].filter(Boolean).join(' · ')), el('span', 'mute', (a.ts || '').slice(11, 19))); more.appendChild(line); }
+        };
+        box.appendChild(c);
+      }
+      v.replaceChildren(box);
+    };
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 3000);
+  },
+
+  async update(v) {
+    const draw = async () => {
+      const s = await api('/api/update/status'), box = el('div');
+      if (s.enabled === false) { v.replaceChildren(el('p', 'mute', '自己更新は有効ではありません（config の [update] remote_url が未設定）。')); return; }
+      const top = el('div', 'card'), kv = el('div', 'kv');
+      const row = (k, val) => { kv.append(el('div', 'mute', k), el('div', '', val)); };
+      row('現在の版', (s.version || '').slice(0, 12) || '-');
+      row('更新元', `${s.remote}（${s.branch}）`);
+      row('スーパーバイザー', s.supervised ? '経由で起動中（適用・自動ロールバックが可能）' : '経由していません（確認・準備まで。適用には supervisor.py での起動が必要）');
+      row('現在 / 直前のリリース', `${s.current_release || '-'} / ${s.previous_release || '-'}`);
+      if (s.pending) row('試用期間中', `${s.pending.from} → ${s.pending.to}（正常に動き続けると確定。失敗すると自動で戻ります）`);
+      if (s.last_update) row('直近の更新', `${s.last_update.status}: ${s.last_update.from || '-'} → ${s.last_update.to || '-'}${s.last_update.reason ? '（' + s.last_update.reason + '）' : ''}`);
+      if (s.busy) row('作業中', s.busy);
+      top.appendChild(kv); box.appendChild(top);
+      const bar = el('div', 'row'), chk = el('button', '', '更新を確認'), prep = el('button', '', '最新を検証して準備（テスト）'), back = el('button', 'danger', '直前の版に戻す（承認を作成）');
+      const act = async (fn) => { try { await fn(); } catch (e) { alert(e.message); } draw(); };
+      chk.onclick = () => act(() => post('/api/update/check'));
+      prep.onclick = () => act(() => post('/api/update/prepare'));
+      back.onclick = () => act(async () => { await post('/api/update/rollback'); alert('承認要求を作りました。「承認」タブで内容を確認して承認してください。'); show('approvals'); });
+      chk.disabled = prep.disabled = !!s.busy; bar.append(chk, prep, back); box.appendChild(bar);
+      const lc = s.last_check;
+      if (lc) {
+        const c = el('div', 'card');
+        c.append(el('strong', '', { up_to_date: '最新です', behind: `更新があります（${lc.commits.length}件）`, ahead: '手元の版のほうが新しい（開発中）', diverged: '履歴が分岐しています（自動では更新しません）', current_unknown: '現在の版が不明です' }[lc.state] || lc.state),
+                 el('div', 'mute', `最新 ${lc.latest.slice(0, 12)} · 確認 ${lc.checked_at} · ${lc.note}`));
+        for (const k of lc.commits) c.appendChild(el('div', '', `${k.sha.slice(0, 7)} ${k.date} ${k.author}: ${k.subject}`));
+        box.appendChild(c);
+      }
+      if (s.last_prepare) {
+        const p = s.last_prepare, c = el('div', 'card');
+        c.append(badge({ running: 'running', done: 'done', failed: 'error' }[p.state]), el('strong', '', ' 準備: ' + ({ running: '実行中…（数分かかります）', done: '完了（検証済み）', failed: '失敗（この版は適用されません）' }[p.state])));
+        if (p.error) c.appendChild(el('pre', '', p.error));
+        if (p.result && p.result.steps) c.appendChild(el('div', 'mute', Object.entries(p.result.steps).map(([k, x]) => `${k}: ${x}`).join(' / ')));
+        box.appendChild(c);
+      }
+      if (s.prepared && s.prepared.length) {
+        const c = el('div', 'card'); c.appendChild(el('strong', '', '検証済みのリリース'));
+        for (const name of s.prepared) {
+          const r = el('div', 'row'); r.appendChild(el('span', 'grow', name + (name === s.current_release ? '（現在）' : '')));
+          if (name !== s.current_release) { const b = el('button', '', '適用（承認を作成）'); b.disabled = !s.supervised;
+            b.onclick = () => act(async () => { await post('/api/update/apply', { sha: name }); alert('承認要求を作りました。「承認」タブで内容を確認して承認してください。'); show('approvals'); }); r.appendChild(b); }
+          c.appendChild(r);
+        }
+        box.appendChild(c);
+      }
+      v.replaceChildren(box);
+    };
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 4000);
+  },
+
+  async jobs(v) {
+    const form = el('div', 'card'), ta = el('textarea'), row = el('div', 'row'), when = el('select'), go = el('button', '', 'ジョブを追加'), out = el('div');
+    ta.rows = 3; ta.style.cssText = 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit';
+    ta.placeholder = '預ける依頼（例：faraway のテストを実行して結果をまとめて）';
+    const draw = async () => {
+      const { jobs, window } = await api('/api/jobs');
+      when.replaceChildren(new Option('今すぐ（対話中は延期）', 'now'), new Option(`夜間のみ（${window ? window.join('〜') : '-'}）`, 'night'));
+      out.replaceChildren(el('p', 'mute', `${jobs.length} 件（5秒ごとに更新）。バッチ用スロットで1件ずつ実行します。影響のある操作（R2）は承認待ちで止まります。`));
+      for (const j of jobs) {
+        const c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(j.status), el('strong', 'grow', j.request), el('span', 'mute', `${j.when} · ${j.device}`));
+        if (['queued', 'running'].includes(j.status)) { const b = el('button', 'danger', j.status === 'queued' ? '取り消し' : '中止'); b.onclick = async () => { try { await post(`/api/jobs/${j.id}/cancel`); } catch (e) { alert(e.message); } draw(); }; top.appendChild(b); }
+        c.append(top, el('div', 'mute', `${fmt(j.created_at)} · ID ${j.id}`)); if (j.result) c.appendChild(el('pre', '', j.result)); out.appendChild(c);
+      }
+    };
+    go.onclick = async () => { if (!ta.value.trim()) return; try { await post('/api/jobs', { request: ta.value, when: when.value }); ta.value = ''; } catch (e) { alert('追加できませんでした: ' + e.message); } draw(); };
+    row.append(when, go); form.append(ta, row); v.replaceChildren(form, out);
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 5000);
+  },
+
+  async approvals(v) {
+    const draw = async () => {
+      const { approvals, ttl_seconds } = await api('/api/approvals'), box = el('div');
+      box.appendChild(el('p', 'mute', `影響のある操作（R2）は、ここで承認するまで実行されません。承認は1回限りで、${Math.round(ttl_seconds / 60)}分で期限切れになります。`));
+      if (!approvals.length) box.appendChild(el('p', 'mute', '承認待ちはありません。'));
+      for (const a of approvals) {
+        const c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(a.status), el('strong', 'grow', a.tool), el('span', 'mute', `ID ${a.id}`));
+        c.append(top, el('p', '', a.summary), el('div', 'mute', '引数'), el('pre', '', JSON.stringify(a.args, null, 2)),
+                 el('div', 'mute', `操作ハッシュ ${a.hash.slice(0, 16)}…（承認時にこのハッシュと一致した操作だけが実行されます）`));
+        if (a.status === 'pending') {
+          const left = Math.max(0, Math.round(a.expires_at - Date.now() / 1000));
+          const row = el('div', 'row'), ok = el('button', '', '承認して実行'), no = el('button', 'danger', '却下');
+          ok.onclick = async () => { ok.disabled = no.disabled = true; try { await post(`/api/approvals/${a.id}/approve`, { hash: a.hash }); } catch (e) { alert('承認できませんでした: ' + e.message); } draw(); badge_(); };
+          no.onclick = async () => { ok.disabled = no.disabled = true; try { await post(`/api/approvals/${a.id}/reject`); } catch (e) { alert('却下できませんでした: ' + e.message); } draw(); badge_(); };
+          row.append(ok, no, el('span', 'mute', `残り約${Math.ceil(left / 60)}分`)); c.appendChild(row);
+        } else if (a.result_summary) c.append(el('div', 'mute', `結果（${a.decided_by || '-'}）`), el('pre', '', a.result_summary));
+        box.appendChild(c);
+      }
+      v.replaceChildren(box);
+    };
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 3000);
+  },
+
+  async audit(v) {
+    const f = el('div', 'row'), q = el('input', 'grow'), ev = el('select'), tl = el('input'), days = el('select');
+    q.placeholder = 'キーワード'; tl.placeholder = 'ツール名';
+    for (const e of ['', 'request', 'response', 'tool_call', 'auth_failed', 'limit_reached', 'empty_response', 'cancelled', 'cancel_requested']) ev.appendChild(new Option(e || '全イベント', e));
+    for (const d of [1, 3, 7, 30, 90]) days.appendChild(new Option(`直近${d}日`, d));
+    days.value = 3; const go = el('button', '', '検索'), out = el('div');
+    const run = async () => {
+      const p = new URLSearchParams({ q: q.value, event: ev.value, tool: tl.value, days: days.value, limit: 200 });
+      const { events } = await api('/api/audit?' + p); out.replaceChildren(el('p', 'mute', `${events.length} 件（新しい順、最大200件）`));
+      for (const e of events) {
+        const c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(e.status || e.event), el('span', 'grow', [e.event, e.tool, e.level].filter(Boolean).join(' · ')), el('span', 'mute', (e.ts || '').replace('T', ' ').slice(0, 19)));
+        const det = el('pre', '', JSON.stringify(e, null, 2)); det.hidden = true; top.onclick = () => det.hidden = !det.hidden;
+        c.append(top, det); out.appendChild(c);
+      }
+    };
+    go.onclick = run; q.onkeydown = e => { if (e.key === 'Enter') run(); };
+    f.append(q, ev, tl, days, go); v.replaceChildren(f, out); await run();
+  },
+
+  async dashboard(v) {
+    const draw = async () => {
+      const d = await api('/api/dashboard'), box = el('div');
+      box.appendChild(el('p', 'mute', `実行中の作業: ${d.runs_running} 件（10秒ごとに更新）`));
+      for (const key of ['host_status', 'network']) {
+        const c = el('div', 'card'); c.appendChild(el('strong', '', key === 'host_status' ? 'ホスト（この PC）' : 'LAN 機器'));
+        c.appendChild(el('pre', '', JSON.stringify(d[key], null, 2))); box.appendChild(c);
+      }
+      v.replaceChildren(box);
+    };
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 10000);
+  },
+
+  async tools(v) {
+    const { tools } = await api('/api/tools'), t = el('table');
+    t.appendChild(Object.assign(el('tr'), {})).append(el('th', '', 'ツール'), el('th', '', '権限'), el('th', '', '内容'));
+    for (const x of tools) { const r = el('tr'); r.append(el('td', '', x.name), el('td', '', x.level), el('td', '', x.description)); t.appendChild(r); }
+    v.replaceChildren(el('p', 'mute', 'R0: 読み取り / R1: 可逆（監査ログ必須） / R2: 承認必須 / R3: 禁止（登録不可）'), t);
+  },
+
+  async devices(v) {
+    const draw = async () => {
+      const { devices, bridge } = await api('/api/devices');
+      const box = el('div');
+      box.appendChild(el('p', 'mute', 'トークンを発行済みの端末（失効はサーバーで python -m api.tokens revoke <端末名>）。アプリ（EXE/APK）が接続していると、許可フォルダが表示されます（10秒ごとに更新）。'));
+      for (const d of devices) {
+        const b = bridge[d], c = el('div', 'card'), top = el('div', 'row');
+        top.append(badge(b ? (b.online ? 'ok' : 'cancelled') : 'done'), el('strong', 'grow', d), el('span', 'mute', b ? `${b.online ? 'オンライン' : 'オフライン'} · ${b.platform || '-'} · v${b.version || '-'}` : 'ブラウザのみ（ファイルアクセスなし）'));
+        c.appendChild(top);
+        if (b) c.appendChild(el('div', 'mute', b.roots.length ? '許可フォルダ: ' + b.roots.map(r => `${r.name}（${r.mode === 'readwrite' ? '読み書き' : '読み取りのみ'}）`).join('、') : '許可フォルダはまだありません（アプリで追加してください）'));
+        box.appendChild(c);
+      }
+      v.replaceChildren(box);
+    };
+    await draw(); timer = setInterval(() => draw().catch(() => {}), 10000);
+  },
+};
+show('runs');
+</script>
+</body>
+</html>
