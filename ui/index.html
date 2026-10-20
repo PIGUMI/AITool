@@ -41,14 +41,38 @@ try { if ('serviceWorker' in navigator && window.isSecureContext) navigator.serv
 // 会話ID: 同じ会話の中では、直前のやり取りをサーバーが文脈として使う（「1」のような短い返事が通じる）。ページを開き直す／「新しい会話」で新しくなる
 const newId = () => { try { return crypto.randomUUID().replace(/-/g, ''); } catch { return Math.random().toString(36).slice(2) + Date.now().toString(36); } };
 let cid = newId();
-document.getElementById('newc').onclick = () => { cid = newId(); log.replaceChildren(); add('tool', '新しい会話を始めました（これまでの文脈は使いません）。'); };
-function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
+// 会話の表示は、このウィンドウ（タブ）の中にだけ保存する（sessionStorage。ウィンドウを閉じると消える）。
+// 管理画面へ移って戻っても、会話の表示と会話ID（＝サーバー側の文脈）が引き継がれる。サーバーには保存しない。
+const KEY = 'faraway_chat', DRAFT = 'faraway_draft';
+let msgs = [];
+const store = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } },
+                set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
+const persist = () => store.set(KEY, JSON.stringify({ cid, msgs: msgs.slice(-80) }));
+function render(cls, text) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  if (cls === 'err' && text.indexOf('承認が必要です:') === 0) { const a = document.createElement('a'); a.href = '/admin'; a.textContent = ' 承認画面を開く'; a.style.color = 'var(--accent)'; d.appendChild(a); }
+  log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+}
+function add(cls, text) { msgs.push({ cls, text }); persist(); return render(cls, text); }
+document.getElementById('newc').onclick = () => { cid = newId(); msgs = []; log.replaceChildren(); add('tool', '新しい会話を始めました（これまでの文脈は使いません）。'); };
+(() => {   // 復元: 前の表示と会話ID、書きかけの入力
+  try {
+    const s = JSON.parse(store.get(KEY) || 'null');
+    if (s && /^[A-Za-z0-9_-]{1,64}$/.test(s.cid || '') && Array.isArray(s.msgs)) {
+      cid = s.cid; msgs = s.msgs.filter(m => m && typeof m.cls === 'string' && typeof m.text === 'string');
+      for (const m of msgs) render(m.cls, m.text);
+      if (msgs.length && msgs[msgs.length - 1].cls === 'user') render('tool', '（回答の途中で画面を移動したため、回答は表示されません。サーバーでは処理が続いています。管理画面の「作業」で結果を確認するか、もう一度送ってください）');
+    }
+  } catch (e) {}
+  const draft = store.get(DRAFT); if (draft) q.value = draft;
+})();
+q.addEventListener('input', () => store.set(DRAFT, q.value));
 document.getElementById('tok').onclick = () => { const v = prompt('APIトークンを入力（この端末のブラウザにだけ保存されます）', ''); if (v !== null) set(v.trim()); };
 document.getElementById('f').onsubmit = async e => {
   e.preventDefault();
   const text = q.value.trim(); if (!text) return;
   if (!get()) { add('err', '先に「トークン設定」でAPIトークンを入力してください。'); return; }
-  add('user', text); q.value = ''; send.disabled = true;
+  add('user', text); q.value = ''; store.set(DRAFT, ''); send.disabled = true;
   try {
     const r = await fetch('/api/chat', { method:'POST', headers:{ 'Authorization':'Bearer ' + get(), 'Content-Type':'application/json' }, body: JSON.stringify({ request:text, conversation:cid }) });
     if (r.status === 401) { add('err', '認証に失敗しました。トークンを確認してください。'); return; }
@@ -62,7 +86,7 @@ document.getElementById('f').onsubmit = async e => {
         if (!line.startsWith('data: ')) continue;
         const ev = JSON.parse(line.slice(6));
         if (ev.type === 'tool') add('tool', `ツール ${ev.tool}: ${ev.status}`);
-        else if (ev.type === 'approval') { const d = add('err', `承認が必要です: ${ev.summary}（まだ実行していません）`); const a = document.createElement('a'); a.href = '/admin'; a.textContent = ' 承認画面を開く'; a.style.color = 'var(--accent)'; d.appendChild(a); }
+        else if (ev.type === 'approval') add('err', `承認が必要です: ${ev.summary}（まだ実行していません）`);
         else if (ev.type === 'message') add('bot', ev.text);
         else if (ev.type === 'error') add('err', ev.text);
       }
