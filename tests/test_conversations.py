@@ -226,3 +226,11 @@ def test_device_questions_still_route_to_device_tools():
 
 def test_prompt_separates_feature_requests_from_updates():
     assert "update_check ではなく、開発の手順で進めます" in SYSTEM_PROMPT and "機能そのものは作りません" in SYSTEM_PROMPT
+
+
+def test_ui_submits_with_shift_enter_but_not_while_composing_japanese(srv):
+    base, *_ = srv
+    html = urllib.request.urlopen(base + "/").read().decode()
+    assert "e.shiftKey" in html and "e.ctrlKey" in html and "e.metaKey" in html          # Shift / Ctrl / Cmd + Enter で送信
+    assert "e.isComposing" in html and "e.keyCode === 229" in html                      # 日本語入力の変換確定の Enter では送信しない
+    assert "Shift+Enter で送信" in html and "send.disabled" in html                      # 案内の文言。送信中の二重送信を防ぐ

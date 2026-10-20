@@ -29,7 +29,7 @@
 <body>
 <header><strong>Faraway</strong><span><a href="/admin" style="color:var(--accent);margin-right:12px">管理</a><button id="newc" type="button">新しい会話</button> <button id="tok" type="button">トークン設定</button></span></header>
 <div id="log" aria-live="polite"></div>
-<form id="f"><textarea id="q" rows="2" placeholder="依頼を入力（例：GPUの状態は？）"></textarea><button id="send">送信</button></form>
+<form id="f"><textarea id="q" rows="2" placeholder="依頼を入力（Shift+Enter で送信 / Enter は改行）"></textarea><button id="send">送信</button></form>
 <script>
 const log = document.getElementById('log'), q = document.getElementById('q'), send = document.getElementById('send');
 const get = () => { try { return localStorage.getItem('assistant_token') || ''; } catch { return ''; } };
@@ -94,7 +94,12 @@ document.getElementById('f').onsubmit = async e => {
   } catch (err) { add('err', '接続できませんでした。'); }
   finally { send.disabled = false; q.focus(); }
 };
-q.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) document.getElementById('f').requestSubmit(); });
+// Shift+Enter（または Ctrl/Cmd+Enter）で送信。Enter だけなら改行。
+// 日本語入力の変換中（isComposing / keyCode 229）の Enter は「変換の確定」なので、送信しない。
+q.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+  if (e.shiftKey || e.ctrlKey || e.metaKey) { e.preventDefault(); if (!send.disabled) document.getElementById('f').requestSubmit(); }
+});
 </script>
 </body>
 </html>
