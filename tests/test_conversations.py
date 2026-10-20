@@ -182,3 +182,14 @@ def test_forced_tools_are_all_real_tool_names():
     for r in DEFAULT_FORCE_RULES:
         for t in r["tools"]:  # type: ignore[union-attr]
             assert t in names or t in {"web_render"}, t
+
+
+# --- 画面: 管理画面へ移っても会話の表示が消えない ---
+def test_ui_persists_chat_in_the_window_only(srv):
+    base, *_ = srv
+    html = urllib.request.urlopen(base + "/").read().decode()
+    assert "sessionStorage" in html and "faraway_chat" in html and "faraway_draft" in html     # このウィンドウ内にだけ保存（ウィンドウを閉じると消える）
+    assert "localStorage.setItem('faraway_chat'" not in html and "localStorage.setItem(KEY" not in html   # 会話の内容は永続的な保存先には置かない
+    assert "ev.type === 'approval') add('err'" in html                                         # 承認の案内も復元できる形で追加している
+    assert "回答の途中で画面を移動した" in html                                                    # 途中で移動した場合の案内
+    assert "msgs.slice(-80)" in html                                                           # 保存は直近80件まで
