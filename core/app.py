@@ -12,6 +12,7 @@ from .audit import AuditLog
 from .bridge import DeviceBridge
 from .config import data_path, load_config
 from .llm import LLMClient
+from .prompts import DEFAULT_FORCE_RULES
 from .secrets import read_secret
 from .slots import SlotPool
 from .updater import Updater
@@ -67,5 +68,5 @@ def build_agent(config_path: Path | str | None = None, llm: LLMClient | None = N
     ucfg = cfg.get("update", {})
     updater = Updater(ucfg, audit) if ucfg.get("remote_url") else None
     return Agent(llm, build_registry(cfg, audit, bridge, updater), audit, cfg["agent"]["max_tool_calls"], cfg["agent"]["max_llm_turns"], slots,
-                 force_rules=cfg["agent"].get("force_tools", []), approval_ttl=cfg["agent"].get("approval_ttl_seconds", 600),
+                 force_rules=DEFAULT_FORCE_RULES + list(cfg["agent"].get("force_tools", [])), approval_ttl=cfg["agent"].get("approval_ttl_seconds", 600),
                  bridge=bridge, updater=updater)

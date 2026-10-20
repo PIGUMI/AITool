@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from core.agent import Agent
+from core.conversations import ConversationStore
 from core.jobs import JobQueue
 from core.slots import SlotBusy
 from core.updater import UpdateError
@@ -71,6 +72,7 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
     """トークンが1つも無いサーバーは作らない（認証は必須）。"""
     if not tokens.devices():
         raise RuntimeError("APIトークンが未発行です。python -m api.tokens add <端末名> で発行してください")
+    convs = ConversationStore()   # 会話の短期記憶（メモリのみ）
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a: Any) -> None:  # 標準出力にトークン等を出さない
@@ -266,16 +268,21 @@ def make_server(agent: Agent, tokens: TokenStore, host: str, port: int, jobs: Jo
                 n = int(self.headers.get("Content-Length", "0"))
                 if n > MAX_BODY:
                     return self._json(413, {"error": "too large"})
-                request = str(json.loads(self.rfile.read(n))["request"]).strip()
+                body = json.loads(self.rfile.read(n))
+                request = str(body["request"]).strip()
                 if not request:
                     raise ValueError
-            except (ValueError, KeyError, TypeError):
+                cid = str(body.get("conversation", ""))   # 会話ID（画面が会話ごとに発行）。省略時は文脈なしの単発
+            except (ValueError, KeyError, TypeError, AttributeError):
                 return self._json(400, {"error": "request が必要です"})
             q: queue.Queue[dict[str, Any] | None] = queue.Queue()
+            history, was_tainted = convs.get(device, cid)
 
             def work() -> None:
                 try:
-                    r = agent.run(request, on_event=q.put, device=device)
+                    r = agent.run(request, on_event=q.put, device=device, history=history, tainted=was_tainted)
+                    if r.stopped_reason == "done":   # 正常に終わったやり取りだけを、会話の文脈に残す
+                        convs.add(device, cid, request, r.answer, r.tainted)
                     q.put({"type": "done", "request_id": r.request_id, "stopped_reason": r.stopped_reason,
                            "tool_calls": r.tool_calls})
                 except SlotBusy as e:

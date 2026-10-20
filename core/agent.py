@@ -66,8 +66,13 @@ class Agent:
         self.updater = updater                  # 自己更新（[update] remote_url が設定されているときだけ）
 
     def run(self, request: str, slot: str = "interactive", on_event: EventCallback | None = None,
-            device: str = "-", request_id: str | None = None) -> AgentResult:
-        """1件の依頼を処理する。経過は tracker に残り、管理画面から中止できる。"""
+            device: str = "-", request_id: str | None = None, history: list[dict[str, Any]] | None = None,
+            tainted: bool = False) -> AgentResult:
+        """1件の依頼を処理する。経過は tracker に残り、管理画面から中止できる。
+
+        history: 同じ会話の直前までのやり取り（{"role": "user"|"assistant", "content": ...}）。短い返事（「1」など）の文脈になる。
+        tainted: 同じ会話の中で、すでに私的データ（端末のファイル）を読んでいる。外部通信ツールは、この会話では使えない。
+        """
         rid = request_id or uuid.uuid4().hex[:12]
         user_emit = on_event or (lambda e: None)
 
@@ -79,7 +84,7 @@ class Agent:
         self.audit.write("request", rid, request=request[:200], slot=slot, device=device)
         try:
             with self.slots.acquire(slot):
-                result = self._loop(rid, request, emit)
+                result = self._loop(rid, request, emit, history or [], tainted)
         except BaseException:
             self.tracker.finish(rid, "error", "", 0)
             raise
@@ -105,12 +110,12 @@ class Agent:
         emit({"type": "message", "text": res.answer})
         return True
 
-    def _loop(self, rid: str, request: str, emit: EventCallback) -> AgentResult:
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": request},
-        ]
-        res = AgentResult(request_id=rid, answer="")
+    def _loop(self, rid: str, request: str, emit: EventCallback, history: list[dict[str, Any]] | None = None,
+              tainted: bool = False) -> AgentResult:
+        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages += [{"role": m["role"], "content": m["content"]} for m in (history or []) if m.get("role") in ("user", "assistant")]
+        messages.append({"role": "user", "content": request})
+        res = AgentResult(request_id=rid, answer="", tainted=tainted)
         tools = self.registry.openai_tools()
         retried = False
         forced = self._forced_tools(request)
